@@ -1,0 +1,42 @@
+.App {
+  text-align: center;
+}
+
+.App-header {
+  background-color: #282c34;
+  padding: 20px;
+  color: white;
+}
+
+.App-main {
+  margin: 20px;
+}
+
+/* Card animations */
+.metric-card {
+  transition: transform 0.2s ease-in-out;
+}
+
+.metric-card:hover {
+  transform: translateY(-4px);
+}
+
+/* Status indicators */
+.status-online {
+  color: #4caf50;
+}
+
+.status-offline {
+  color: #f44336;
+}
+
+.status-warning {
+  color: #ff9800;
+}
+
+/* Layout responsive */
+@media (max-width: 768px) {
+  .App-main {
+    margin: 10px;
+  }
+}

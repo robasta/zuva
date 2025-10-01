@@ -8,17 +8,14 @@ RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Copy collector source code first
+COPY . /app/collector/
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies from collector requirements
+RUN pip install --no-cache-dir -r /app/collector/requirements.txt
 
 # Copy the parent sunsynk module
 COPY ../sunsynk /app/sunsynk/
-
-# Copy collector source code
-COPY . /app/collector/
 
 # Copy analytics module
 COPY ../analytics /app/analytics/
