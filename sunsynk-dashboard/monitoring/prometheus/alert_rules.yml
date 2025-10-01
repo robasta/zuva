@@ -1,0 +1,102 @@
+groups:
+  - name: sunsynk_infrastructure
+    rules:
+      # Service availability alerts
+      - alert: ServiceDown
+        expr: up{job!="docker-containers"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "Service {{ $labels.job }} has been down for more than 1 minute."
+
+      # System resource alerts  
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is above 80% for more than 2 minutes."
+
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 90
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is above 90% for more than 2 minutes."
+
+      - alert: LowDiskSpace
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} * 100) < 10
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Disk space is below 10% on root filesystem."
+
+  - name: sunsynk_application
+    rules:
+      # InfluxDB alerts
+      - alert: InfluxDBHighQueryRate
+        expr: rate(influxdb_query_requests_total[5m]) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "InfluxDB high query rate"
+          description: "InfluxDB query rate is unusually high."
+
+      # API response time alerts
+      - alert: APIHighResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="sunsynk-api"}[5m])) > 2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API high response time"
+          description: "95th percentile response time is above 2 seconds."
+
+      # Data collection alerts
+      - alert: DataCollectionFailure
+        expr: increase(sunsynk_collection_errors_total[10m]) > 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Data collection failures"
+          description: "Multiple data collection failures detected."
+
+  - name: sunsynk_solar_system
+    rules:
+      # Solar system specific alerts
+      - alert: BatteryCriticalLevel
+        expr: sunsynk_battery_level < 10
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Battery level critically low"
+          description: "Battery level is below 10%: {{ $value }}%"
+
+      - alert: GridOutage
+        expr: sunsynk_grid_power == 0 and sunsynk_battery_level < 50
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "Grid outage with low battery"
+          description: "Grid power is off and battery level is below 50%"
+
+      - alert: InverterOffline
+        expr: sunsynk_inverter_status == 0
+        for: 2m
+        labels:
+          severity: high
+        annotations:
+          summary: "Inverter appears offline"
+          description: "No data received from inverter for 2 minutes"

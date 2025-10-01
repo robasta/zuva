@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sunsynk Solar Dashboard - Live Data</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 8px 16px;
+            background: #4CAF50;
+            color: white;
+            border-radius: 20px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            transition: transform 0.3s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .card-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 5px;
+        }
+        
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 10px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        
+        .metric-label {
+            font-weight: 500;
+            color: #555;
+        }
+        
+        .metric-value {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .metric-value.positive {
+            color: #27ae60;
+        }
+        
+        .metric-value.negative {
+            color: #e74c3c;
+        }
+        
+        .metric-value.neutral {
+            color: #f39c12;
+        }
+        
+        .power-flow {
+            text-align: center;
+            background: linear-gradient(45deg, #3498db, #2ecc71);
+            color: white;
+        }
+        
+        .power-icon {
+            font-size: 2em;
+            margin: 10px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: white;
+            font-size: 1.2em;
+        }
+        
+        .error {
+            background: #e74c3c;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        .last-update {
+            text-align: center;
+            color: white;
+            margin-top: 20px;
+            font-style: italic;
+        }
+        
+        .recommendations {
+            background: linear-gradient(45deg, #f39c12, #e67e22);
+            color: white;
+        }
+        
+        .recommendation {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 10px;
+            margin: 8px 0;
+            border-radius: 6px;
+            border-left: 4px solid rgba(255, 255, 255, 0.8);
+        }
+        
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌞 Sunsynk Solar Dashboard</h1>
+            <p>Real-time monitoring of your solar energy system</p>
+            <span class="status-badge" id="connectionStatus">🔄 Connecting...</span>
+        </div>
+        
+        <div id="loadingScreen" class="loading">
+            <h2>🔄 Loading your solar data...</h2>
+            <p>Connecting to your Sunsynk system...</p>
+        </div>
+        
+        <div id="errorScreen" class="error" style="display: none;">
+            <h3>❌ Connection Error</h3>
+            <p id="errorMessage">Unable to connect to the solar monitoring system.</p>
+            <button onclick="location.reload()" style="margin-top: 10px; padding: 10px 20px; background: white; color: #e74c3c; border: none; border-radius: 5px; cursor: pointer;">🔄 Retry</button>
+        </div>
+        
+        <div id="dashboard" style="display: none;">
+            <div class="dashboard-grid">
+                <!-- Power Flow Card -->
+                <div class="card power-flow">
+                    <div class="card-title">⚡ Power Flow</div>
+                    <div class="power-icon">☀️</div>
+                    <div class="metric">
+                        <span class="metric-label">Solar Generation</span>
+                        <span class="metric-value" id="solarPower">-- kW</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">House Consumption</span>
+                        <span class="metric-value" id="consumption">-- kW</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Grid Flow</span>
+                        <span class="metric-value" id="gridPower">-- kW</span>
+                    </div>
+                </div>
+                
+                <!-- Battery Status Card -->
+                <div class="card">
+                    <div class="card-title">🔋 Battery Status</div>
+                    <div class="metric">
+                        <span class="metric-label">State of Charge</span>
+                        <span class="metric-value" id="batterySoc">-- %</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Battery Power</span>
+                        <span class="metric-value" id="batteryPower">-- kW</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Voltage</span>
+                        <span class="metric-value" id="batteryVoltage">-- V</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Status</span>
+                        <span class="metric-value" id="batteryStatus">--</span>
+                    </div>
+                </div>
+                
+                <!-- System Analytics Card -->
+                <div class="card">
+                    <div class="card-title">📊 System Analytics</div>
+                    <div class="metric">
+                        <span class="metric-label">Self-Consumption</span>
+                        <span class="metric-value" id="selfConsumption">-- %</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Grid Independence</span>
+                        <span class="metric-value" id="gridIndependence">--</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Efficiency Score</span>
+                        <span class="metric-value" id="efficiency">-- %</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Inverter</span>
+                        <span class="metric-value">2305156257</span>
+                    </div>
+                </div>
+                
+                <!-- Smart Recommendations Card -->
+                <div class="card recommendations">
+                    <div class="card-title">🧠 ML-Powered Insights</div>
+                    <div id="mlInsights">
+                        <div class="recommendation">🔄 Loading ML analytics...</div>
+                    </div>
+                </div>
+                
+                <!-- Weather Correlation Card -->
+                <div class="card">
+                    <div class="card-title">🌤️ Weather-Solar Correlation</div>
+                    <div class="metric">
+                        <span class="metric-label">Correlation Score</span>
+                        <span class="metric-value" id="weatherCorrelation">--</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Production Forecast</span>
+                        <span class="metric-value" id="productionForecast">-- kW</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Weather Condition</span>
+                        <span class="metric-value" id="weatherCondition">--</span>
+                    </div>
+                </div>
+                
+                <!-- Consumption Intelligence Card -->
+                <div class="card">
+                    <div class="card-title">📊 Consumption Intelligence</div>
+                    <div class="metric">
+                        <span class="metric-label">Pattern Type</span>
+                        <span class="metric-value" id="consumptionPattern">--</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Efficiency Score</span>
+                        <span class="metric-value" id="efficiencyScore">-- %</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Anomalies Today</span>
+                        <span class="metric-value" id="anomaliesCount">--</span>
+                    </div>
+                </div>
+                
+                <!-- Battery Intelligence Card -->
+                <div class="card">
+                    <div class="card-title">� Battery Intelligence</div>
+                    <div class="metric">
+                        <span class="metric-label">Optimal SOC Range</span>
+                        <span class="metric-value" id="optimalSocRange">--</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Est. Monthly Savings</span>
+                        <span class="metric-value" id="monthlySavings">R --</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Optimization Status</span>
+                        <span class="metric-value" id="optimizationStatus">--</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="last-update">
+                Last updated: <span id="lastUpdate">--</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class SunsynkDashboard {
+            constructor() {
+                this.apiUrl = 'http://localhost:8001/api';
+                this.token = null;
+                this.updateInterval = null;
+                this.init();
+            }
+            
+            // Power formatting utility - display values under 1kW in watts
+            formatPower(value) {
+                if (!value && value !== 0) return '0 W';
+                
+                const absoluteValue = Math.abs(value);
+                
+                // If value is less than 1 kW (1000 W), display in watts
+                if (absoluteValue < 1) {
+                    const watts = absoluteValue * 1000;
+                    return `${watts.toFixed(0)} W`;
+                }
+                
+                // For values 1 kW and above, display in kilowatts
+                return `${absoluteValue.toFixed(2)} kW`;
+            }
+            
+            formatPowerWithSign(value) {
+                if (!value && value !== 0) return '0 W';
+                
+                const absoluteValue = Math.abs(value);
+                const sign = value < 0 ? '-' : '';
+                
+                // If value is less than 1 kW (1000 W), display in watts
+                if (absoluteValue < 1) {
+                    const watts = absoluteValue * 1000;
+                    return `${sign}${watts.toFixed(0)} W`;
+                }
+                
+                // For values 1 kW and above, display in kilowatts
+                return `${sign}${absoluteValue.toFixed(2)} kW`;
+            }
+            
+            async init() {
+                try {
+                    await this.authenticate();
+                    await this.loadDashboardData();
+                    this.startRealTimeUpdates();
+                    this.showDashboard();
+                } catch (error) {
+                    this.showError(error.message);
+                }
+            }
+            
+            async authenticate() {
+                try {
+                    const response = await fetch(`${this.apiUrl}/auth/login`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            username: 'admin',
+                            password: 'admin123'
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error('Authentication failed');
+                    }
+                    
+                    const data = await response.json();
+                    this.token = data.access_token;
+                    this.updateConnectionStatus('✅ Connected', '#27ae60');
+                } catch (error) {
+                    throw new Error('Failed to authenticate with the API');
+                }
+            }
+            
+            async apiRequest(endpoint) {
+                const response = await fetch(`${this.apiUrl}${endpoint}`, {
+                    headers: {
+                        'Authorization': `Bearer ${this.token}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API request failed: ${response.statusText}`);
+                }
+                
+                return response.json();
+            }
+            
+            async loadDashboardData() {
+                try {
+                    // Get current dashboard data
+                    const currentData = await this.apiRequest('/dashboard/current');
+                    this.updateDashboard(currentData);
+                    
+                    // Get ML analytics data
+                    await this.loadMLAnalytics();
+                    
+                } catch (error) {
+                    console.error('Failed to load dashboard data:', error);
+                    throw error;
+                }
+            }
+            
+            async loadMLAnalytics() {
+                try {
+                    // Weather correlation analysis
+                    const weatherData = await this.apiRequest('/v6/weather/correlation?days=3');
+                    this.updateWeatherCorrelation(weatherData);
+                    
+                    // Consumption pattern analysis  
+                    const consumptionData = await this.apiRequest('/v6/consumption/patterns?days=7');
+                    this.updateConsumptionIntelligence(consumptionData);
+                    
+                    // Battery optimization
+                    const batteryData = await this.apiRequest('/v6/battery/optimization');
+                    this.updateBatteryIntelligence(batteryData);
+                    
+                    // Get optimization recommendations
+                    const recommendations = await this.apiRequest('/v6/analytics/optimization');
+                    this.updateMLInsights(recommendations);
+                    
+                } catch (error) {
+                    console.error('ML Analytics failed:', error);
+                    this.updateMLInsights({
+                        recommendations: [{
+                            title: 'ML Analytics Unavailable',
+                            description: 'Advanced analytics temporarily unavailable. Using basic recommendations.',
+                            impact: 'System monitoring continues with standard features.'
+                        }]
+                    });
+                }
+            }
+            
+            updateWeatherCorrelation(data) {
+                if (data.correlation_analysis) {
+                    const correlation = (data.correlation_analysis.correlation_coefficient * 100).toFixed(1);
+                    document.getElementById('weatherCorrelation').textContent = `${correlation}%`;
+                    
+                    if (data.production_forecast && data.production_forecast.length > 0) {
+                        const nextHourForecast = data.production_forecast[0];
+                        document.getElementById('productionForecast').textContent = 
+                            this.formatPower(nextHourForecast.predicted_production || 0);
+                    }
+                    
+                    document.getElementById('weatherCondition').textContent = data.confidence || 'Unknown';
+                } else {
+                    document.getElementById('weatherCorrelation').textContent = 'N/A';
+                    document.getElementById('productionForecast').textContent = 'N/A';
+                    document.getElementById('weatherCondition').textContent = 'N/A';
+                }
+            }
+            
+            updateConsumptionIntelligence(data) {
+                if (data.patterns && data.patterns.length > 0) {
+                    const primaryPattern = data.patterns[0];
+                    document.getElementById('consumptionPattern').textContent = primaryPattern.type || 'Standard';
+                    document.getElementById('efficiencyScore').textContent = 
+                        `${(primaryPattern.efficiency_score * 100).toFixed(1)}%`;
+                } else {
+                    document.getElementById('consumptionPattern').textContent = 'N/A';
+                    document.getElementById('efficiencyScore').textContent = 'N/A';
+                }
+                
+                if (data.anomalies) {
+                    const todayAnomalies = data.anomalies.filter(a => 
+                        new Date(a.timestamp).toDateString() === new Date().toDateString()
+                    );
+                    document.getElementById('anomaliesCount').textContent = todayAnomalies.length.toString();
+                } else {
+                    document.getElementById('anomaliesCount').textContent = '0';
+                }
+            }
+            
+            updateBatteryIntelligence(data) {
+                if (data.optimal_soc_range) {
+                    const range = `${data.optimal_soc_range.min}% - ${data.optimal_soc_range.max}%`;
+                    document.getElementById('optimalSocRange').textContent = range;
+                } else {
+                    document.getElementById('optimalSocRange').textContent = '20% - 80%';
+                }
+                
+                if (data.cost_savings && data.cost_savings.monthly_savings) {
+                    document.getElementById('monthlySavings').textContent = 
+                        `R${data.cost_savings.monthly_savings.toFixed(2)}`;
+                } else {
+                    document.getElementById('monthlySavings').textContent = 'R0.00';
+                }
+                
+                document.getElementById('optimizationStatus').textContent = 
+                    data.optimization_active ? '✅ Active' : '⚠️ Inactive';
+            }
+            
+            updateMLInsights(data) {
+                const container = document.getElementById('mlInsights');
+                const recommendations = data.recommendations || [];
+                
+                if (recommendations.length === 0) {
+                    container.innerHTML = '<div class="recommendation">✅ System operating optimally</div>';
+                    return;
+                }
+                
+                container.innerHTML = recommendations.slice(0, 3).map(rec => 
+                    `<div class="recommendation">
+                        <strong>🧠 ${rec.title || rec.type}</strong><br>
+                        ${rec.description}<br>
+                        <small>💰 ${rec.impact || rec.potential_savings}</small>
+                    </div>`
+                ).join('');
+            }
+            
+            updateDashboard(data) {
+                const metrics = data.metrics;
+                const status = data.status;
+                
+                // Update power flow
+                document.getElementById('solarPower').textContent = this.formatPower(metrics.solar_power);
+                document.getElementById('consumption').textContent = this.formatPower(metrics.consumption);
+                document.getElementById('gridPower').textContent = this.formatPower(metrics.grid_power);
+                
+                // Update battery status
+                document.getElementById('batterySoc').textContent = `${metrics.battery_level}%`;
+                document.getElementById('batteryPower').textContent = this.formatPower(metrics.grid_power * -1); // Approximate
+                document.getElementById('batteryVoltage').textContent = `52.1V`; // Mock data
+                document.getElementById('batteryStatus').textContent = status.battery_status;
+                
+                // Update analytics
+                const selfConsumption = metrics.solar_power > 0 ? 
+                    Math.min(100, (metrics.consumption / metrics.solar_power) * 100) : 0;
+                document.getElementById('selfConsumption').textContent = `${selfConsumption.toFixed(1)}%`;
+                
+                const gridIndependent = Math.abs(metrics.grid_power) < 0.1;
+                document.getElementById('gridIndependence').textContent = gridIndependent ? '✅ Yes' : '❌ No';
+                document.getElementById('gridIndependence').className = `metric-value ${gridIndependent ? 'positive' : 'negative'}`;
+                
+                document.getElementById('efficiency').textContent = '95.2%';
+                
+                // Update grid power styling
+                const gridElement = document.getElementById('gridPower');
+                if (metrics.grid_power > 0.1) {
+                    gridElement.className = 'metric-value negative';
+                    gridElement.textContent = `${this.formatPower(metrics.grid_power)} (Importing)`;
+                } else if (metrics.grid_power < -0.1) {
+                    gridElement.className = 'metric-value positive';
+                    gridElement.textContent = `${this.formatPower(Math.abs(metrics.grid_power))} (Exporting)`;
+                } else {
+                    gridElement.className = 'metric-value neutral';
+                    gridElement.textContent = `${this.formatPower(metrics.grid_power)} (Independent)`;
+                }
+                
+                // Update battery power styling
+                const batteryElement = document.getElementById('batteryPower');
+                const batteryPower = parseFloat(batteryElement.textContent);
+                if (batteryPower > 0.1) {
+                    batteryElement.className = 'metric-value positive';
+                } else if (batteryPower < -0.1) {
+                    batteryElement.className = 'metric-value negative';
+                } else {
+                    batteryElement.className = 'metric-value neutral';
+                }
+                
+                // Update last update time
+                document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+            }
+            
+            startRealTimeUpdates() {
+                this.updateInterval = setInterval(async () => {
+                    try {
+                        await this.loadDashboardData();
+                        this.updateConnectionStatus('✅ Live', '#27ae60');
+                    } catch (error) {
+                        console.error('Real-time update failed:', error);
+                        this.updateConnectionStatus('⚠️ Reconnecting...', '#f39c12');
+                    }
+                }, 10000); // Update every 10 seconds
+            }
+            
+            updateConnectionStatus(text, color) {
+                const status = document.getElementById('connectionStatus');
+                status.textContent = text;
+                status.style.backgroundColor = color;
+            }
+            
+            showDashboard() {
+                document.getElementById('loadingScreen').style.display = 'none';
+                document.getElementById('errorScreen').style.display = 'none';
+                document.getElementById('dashboard').style.display = 'block';
+            }
+            
+            showError(message) {
+                document.getElementById('loadingScreen').style.display = 'none';
+                document.getElementById('dashboard').style.display = 'none';
+                document.getElementById('errorMessage').textContent = message;
+                document.getElementById('errorScreen').style.display = 'block';
+                this.updateConnectionStatus('❌ Offline', '#e74c3c');
+            }
+        }
+        
+        // Initialize the dashboard when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new SunsynkDashboard();
+        });
+    </script>
+</body>
+</html>

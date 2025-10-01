@@ -1,0 +1,26 @@
+# Core dependencies from parent project
+aiohttp==3.9.1
+asyncio-mqtt==0.16.1
+
+# InfluxDB client for time-series data
+influxdb-client==1.38.0
+
+# Data processing and analysis
+pandas==2.0.3
+numpy==1.24.3
+
+# Configuration and environment
+python-dotenv==1.0.0
+pyyaml==6.0.1
+
+# Logging and monitoring
+structlog==23.1.0
+
+# Utilities
+python-dateutil==2.8.2
+pytz==2023.3
+
+# Development and testing
+pytest==7.4.2
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0

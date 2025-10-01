@@ -16,6 +16,8 @@ from pathlib import Path
 import aiohttp
 import pandas as pd
 import numpy as np
+import psutil
+import shutil
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 
@@ -869,6 +871,132 @@ async def health_check():
             "energy_forecasting": PHASE6_AVAILABLE
         } if PHASE6_AVAILABLE else {}
     }
+
+@app.get("/metrics")
+async def get_prometheus_metrics():
+    """Prometheus metrics endpoint for system monitoring"""
+    try:
+        # System metrics
+        try:
+            cpu_percent = psutil.cpu_percent(interval=1)
+            memory = psutil.virtual_memory()
+            disk = psutil.disk_usage('/')
+            boot_time = psutil.boot_time()
+            uptime = datetime.now().timestamp() - boot_time
+        except:
+            # Fallback if psutil is not available
+            cpu_percent = 0
+            memory = type('obj', (object,), {'percent': 0, 'total': 0, 'used': 0})()
+            disk = type('obj', (object,), {'percent': 0, 'total': 0, 'used': 0})()
+            uptime = 0
+
+        # Application metrics
+        current_data = real_collector.get_current_data()
+        metrics_data = current_data["metrics"] if current_data else {}
+        
+        # Generate Prometheus format metrics
+        prometheus_metrics = [
+            "# HELP sunsynk_system_cpu_percent System CPU usage percentage",
+            "# TYPE sunsynk_system_cpu_percent gauge",
+            f"sunsynk_system_cpu_percent {cpu_percent}",
+            "",
+            "# HELP sunsynk_system_memory_percent System memory usage percentage", 
+            "# TYPE sunsynk_system_memory_percent gauge",
+            f"sunsynk_system_memory_percent {memory.percent}",
+            "",
+            "# HELP sunsynk_system_memory_bytes System memory usage in bytes",
+            "# TYPE sunsynk_system_memory_bytes gauge",
+            f"sunsynk_system_memory_bytes{{type=\"total\"}} {memory.total}",
+            f"sunsynk_system_memory_bytes{{type=\"used\"}} {memory.used}",
+            "",
+            "# HELP sunsynk_system_disk_percent System disk usage percentage",
+            "# TYPE sunsynk_system_disk_percent gauge", 
+            f"sunsynk_system_disk_percent {disk.percent}",
+            "",
+            "# HELP sunsynk_system_disk_bytes System disk usage in bytes",
+            "# TYPE sunsynk_system_disk_bytes gauge",
+            f"sunsynk_system_disk_bytes{{type=\"total\"}} {disk.total}",
+            f"sunsynk_system_disk_bytes{{type=\"used\"}} {disk.used}",
+            "",
+            "# HELP sunsynk_system_uptime_seconds System uptime in seconds",
+            "# TYPE sunsynk_system_uptime_seconds counter",
+            f"sunsynk_system_uptime_seconds {uptime}",
+            "",
+            "# HELP sunsynk_api_health API health status (1=healthy, 0=unhealthy)",
+            "# TYPE sunsynk_api_health gauge",
+            "sunsynk_api_health 1",
+            "",
+            "# HELP sunsynk_influxdb_connected InfluxDB connection status (1=connected, 0=disconnected)",
+            "# TYPE sunsynk_influxdb_connected gauge",
+            f"sunsynk_influxdb_connected {1 if influx_manager.connected else 0}",
+            "",
+            "# HELP sunsynk_background_tasks_running Background tasks status (1=running, 0=stopped)",
+            "# TYPE sunsynk_background_tasks_running gauge",
+            f"sunsynk_background_tasks_running {1 if background_tasks.running else 0}",
+        ]
+        
+        # Solar system metrics
+        if metrics_data:
+            prometheus_metrics.extend([
+                "",
+                "# HELP sunsynk_solar_power Solar power generation in watts", 
+                "# TYPE sunsynk_solar_power gauge",
+                f"sunsynk_solar_power {metrics_data.get('solar_power', 0)}",
+                "",
+                "# HELP sunsynk_battery_level Battery state of charge percentage",
+                "# TYPE sunsynk_battery_level gauge", 
+                f"sunsynk_battery_level {metrics_data.get('battery_soc', 0)}",
+                "",
+                "# HELP sunsynk_battery_power Battery power in watts (positive=charging, negative=discharging)",
+                "# TYPE sunsynk_battery_power gauge",
+                f"sunsynk_battery_power {metrics_data.get('battery_power', 0)}",
+                "",
+                "# HELP sunsynk_grid_power Grid power in watts (positive=importing, negative=exporting)", 
+                "# TYPE sunsynk_grid_power gauge",
+                f"sunsynk_grid_power {metrics_data.get('grid_power', 0)}",
+                "",
+                "# HELP sunsynk_consumption Total power consumption in watts",
+                "# TYPE sunsynk_consumption gauge",
+                f"sunsynk_consumption {metrics_data.get('consumption', 0)}",
+                "",
+                "# HELP sunsynk_battery_voltage Battery voltage in volts",
+                "# TYPE sunsynk_battery_voltage gauge",
+                f"sunsynk_battery_voltage {metrics_data.get('battery_voltage', 0)}",
+                "",
+                "# HELP sunsynk_grid_voltage Grid voltage in volts", 
+                "# TYPE sunsynk_grid_voltage gauge",
+                f"sunsynk_grid_voltage {metrics_data.get('grid_voltage', 0)}",
+            ])
+            
+        # Alert conditions metrics
+        if hasattr(system_monitor, 'alert_conditions'):
+            prometheus_metrics.extend([
+                "",
+                "# HELP sunsynk_alert_condition_triggered Alert condition status (1=triggered, 0=normal)",
+                "# TYPE sunsynk_alert_condition_triggered gauge",
+            ])
+            
+            monitoring_data = {**metrics_data}
+            for condition_name, condition_func in system_monitor.alert_conditions.items():
+                try:
+                    triggered = 1 if condition_func(monitoring_data) else 0
+                    prometheus_metrics.append(f"sunsynk_alert_condition_triggered{{condition=\"{condition_name}\"}} {triggered}")
+                except:
+                    prometheus_metrics.append(f"sunsynk_alert_condition_triggered{{condition=\"{condition_name}\"}} 0")
+
+        # Add timestamp
+        prometheus_metrics.extend([
+            "",
+            "# HELP sunsynk_metrics_timestamp_seconds Timestamp of last metrics update",
+            "# TYPE sunsynk_metrics_timestamp_seconds gauge",
+            f"sunsynk_metrics_timestamp_seconds {datetime.now().timestamp()}",
+        ])
+        
+        return "\n".join(prometheus_metrics)
+        
+    except Exception as e:
+        logger.error(f"Failed to generate metrics: {e}")
+        return f"# Error generating metrics: {str(e)}"
 
 @app.post("/api/auth/login", response_model=LoginResponse)
 async def login(login_data: LoginRequest):

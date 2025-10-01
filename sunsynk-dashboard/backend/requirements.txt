@@ -34,6 +34,7 @@ scipy==1.11.4
 
 # Logging & Monitoring
 structlog==23.2.0
+psutil==5.9.6
 
 # Development & Testing
 pytest==7.4.3
