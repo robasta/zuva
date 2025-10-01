@@ -130,6 +130,32 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# Sunsynk Dashboard specific
+sunsynk-dashboard/backend/*.log
+sunsynk-dashboard/backend/nohup.out
+sunsynk-dashboard/frontend/node_modules/
+sunsynk-dashboard/frontend/build/
+sunsynk-dashboard/frontend/.env.local
+sunsynk-dashboard/simple-frontend/
+
+# Docker volumes
+docker-data/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
 # VS Code
 .vscode/
 
