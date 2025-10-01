@@ -118,7 +118,7 @@ services:
     container_name: sunsynk-nginx
     restart: always
     ports:
-      - "8080:80"
+      - "80:80"
     networks:
       - sunsynk-network
     volumes:
