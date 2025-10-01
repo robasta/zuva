@@ -6,19 +6,24 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
+    python3-dev \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy collector source code first
-COPY . /app/collector/
+# Copy requirements first for better caching
+COPY collector/requirements.txt /app/
 
-# Install Python dependencies from collector requirements
-RUN pip install --no-cache-dir -r /app/collector/requirements.txt
+# Install Python dependencies
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Copy collector source code
+COPY collector/ /app/collector/
 
 # Copy the parent sunsynk module
-COPY ../sunsynk /app/sunsynk/
+COPY sunsynk/ /app/sunsynk/
 
-# Copy analytics module
-COPY ../analytics /app/analytics/
+# Copy analytics module  
+COPY analytics/ /app/analytics/
 
 # Set Python path to include all directories
 ENV PYTHONPATH="/app:/app/collector:/app/analytics"

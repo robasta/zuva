@@ -50,7 +50,7 @@ services:
     volumes:
       - ./collector:/app/collector
       - ./analytics:/app/analytics
-      - ./sunsynk:/app/sunsynk
+      - ../sunsynk:/app/sunsynk
       - ./logs:/app/logs
     networks:
       - sunsynk-network
@@ -92,7 +92,7 @@ services:
       - ./backend:/app
       - ./collector:/app/collector
       - ./analytics:/app/analytics
-      - ./sunsynk:/app/sunsynk
+      - ../sunsynk:/app/sunsynk
       - ./logs:/app/logs
     networks:
       - sunsynk-network

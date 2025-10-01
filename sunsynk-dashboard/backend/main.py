@@ -31,7 +31,7 @@ import uuid
 from typing import Union
 
 # Add the sunsynk package to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, '/app')
 
 # Import Sunsynk client
 from sunsynk.client import SunsynkClient
