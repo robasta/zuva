@@ -1,0 +1,162 @@
+version: '3.8'
+
+services:
+  influxdb:
+    image: influxdb:2.0
+    container_name: sunsynk-influxdb
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - influxdb_config:/etc/influxdb2
+    environment:
+      - INFLUXDB_DB=sunsynk
+      - INFLUXDB_ADMIN_USER=admin
+      - INFLUXDB_ADMIN_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:-sunsynkadmin}
+      - INFLUXDB_ADMIN_TOKEN=${INFLUXDB_ADMIN_TOKEN:-sunsynk-admin-token}
+    restart: unless-stopped
+    networks:
+      - sunsynk-network
+
+  data-collector:
+    build: 
+      context: ./collector
+      dockerfile: Dockerfile
+    container_name: sunsynk-collector
+    depends_on:
+      - influxdb
+    environment:
+      - SUNSYNK_USERNAME=${SUNSYNK_USERNAME}
+      - SUNSYNK_PASSWORD=${SUNSYNK_PASSWORD}
+      - WEATHER_API_KEY=${WEATHER_API_KEY}
+      - LOCATION=${LOCATION:-Cape Town,ZA}
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=${INFLUXDB_ADMIN_TOKEN:-sunsynk-admin-token}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-sunsynk}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-solar_data}
+      - COLLECTION_INTERVAL=${COLLECTION_INTERVAL:-30}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    networks:
+      - sunsynk-network
+    volumes:
+      - ./logs:/app/logs
+
+  dashboard-api:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: sunsynk-dashboard-api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - influxdb
+      - data-collector
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=${INFLUXDB_ADMIN_TOKEN:-sunsynk-admin-token}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-sunsynk}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-solar_data}
+      - API_HOST=${API_HOST:-0.0.0.0}
+      - API_PORT=${API_PORT:-8000}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-super-secret-jwt-key}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}
+    restart: unless-stopped
+    networks:
+      - sunsynk-network
+    volumes:
+      - ./logs:/app/logs
+
+  web-dashboard:
+    build:
+      context: ./dashboard/frontend
+      dockerfile: Dockerfile
+    container_name: sunsynk-web-dashboard
+    ports:
+      - "3000:80"
+    depends_on:
+      - dashboard-api
+    environment:
+      - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8000}
+      - REACT_APP_WS_URL=${REACT_APP_WS_URL:-ws://localhost:8000}
+    restart: unless-stopped
+    networks:
+      - sunsynk-network
+
+  notification-engine:
+    build:
+      context: ./notifications
+      dockerfile: Dockerfile
+    container_name: sunsynk-notifications
+    depends_on:
+      - influxdb
+      - analytics-engine
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=${INFLUXDB_ADMIN_TOKEN:-sunsynk-admin-token}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-sunsynk}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-solar_data}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER}
+      - WHATSAPP_FROM=${WHATSAPP_FROM}
+      - SMS_TO=${SMS_TO}
+      - VOICE_TO=${VOICE_TO}
+      - FCM_API_KEY=${FCM_API_KEY}
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST}
+      - EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT:-587}
+      - EMAIL_USERNAME=${EMAIL_USERNAME}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD}
+      - EMAIL_FROM=${EMAIL_FROM}
+      - EMAIL_TO=${EMAIL_TO}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    networks:
+      - sunsynk-network
+    volumes:
+      - ./config/alerts.yaml:/app/config/alerts.yaml:ro
+      - ./logs:/app/logs
+
+  nginx:
+    image: nginx:alpine
+    container_name: sunsynk-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - dashboard-api
+      - web-dashboard
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    restart: unless-stopped
+    networks:
+      - sunsynk-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: sunsynk-grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - influxdb
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    restart: unless-stopped
+    networks:
+      - sunsynk-network
+
+networks:
+  sunsynk-network:
+    driver: bridge
+
+volumes:
+  influxdb_data:
+  influxdb_config:
+  grafana_data:

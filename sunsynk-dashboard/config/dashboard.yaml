@@ -1,0 +1,289 @@
+# Sunsynk Solar Dashboard Configuration
+# Main configuration file for dashboard behavior and preferences
+
+# Application settings
+app:
+  name: "Sunsynk Solar Dashboard"
+  version: "1.0.0"
+  timezone: "Africa/Johannesburg"
+  currency: "ZAR"
+  currency_symbol: "R"
+  
+# System configuration
+system:
+  # Solar system specifications
+  inverter_capacity_kw: 5.0
+  battery_capacity_kwh: 5.0
+  solar_panel_capacity_kw: 6.0
+  
+  # Battery settings
+  battery_min_soc: 15  # Minimum battery level %
+  battery_max_soc: 100
+  battery_efficiency: 0.95  # Round-trip efficiency
+  
+  # Geyser configuration
+  geyser_power_rating: 3.0  # kW
+  geyser_tank_size: 150  # Liters
+  geyser_heating_time: 60  # Minutes to heat full tank
+  
+  # Grid electricity rates
+  grid_import_rate: 2.50  # Cost per kWh
+  feed_in_tariff: 0.80    # Payment per kWh exported
+  peak_rate_multiplier: 1.5  # Peak time rate multiplier
+  peak_hours:
+    weekday:
+      morning: ["06:00", "09:00"]
+      evening: ["17:00", "20:00"]
+    weekend:
+      morning: ["07:00", "10:00"]
+      evening: ["18:00", "20:00"]
+
+# Dashboard display settings
+dashboard:
+  # Refresh intervals (seconds)
+  real_time_refresh: 5
+  chart_refresh: 60
+  weather_refresh: 900  # 15 minutes
+  
+  # Default time ranges for charts
+  default_ranges:
+    overview: "24h"
+    consumption: "7d"
+    weather: "5d"
+    financial: "30d"
+  
+  # Chart colors and themes
+  theme:
+    primary_color: "#FF6B35"  # Solar orange
+    secondary_color: "#004E89"  # Deep blue
+    success_color: "#28A745"
+    warning_color: "#FFC107"
+    danger_color: "#DC3545"
+    info_color: "#17A2B8"
+    
+  # Power flow diagram settings
+  power_flow:
+    show_percentages: true
+    show_power_values: true
+    animate_flows: true
+    highlight_dominant_flow: true
+    
+  # Chart preferences
+  charts:
+    smooth_lines: true
+    show_grid: true
+    show_legends: true
+    responsive: true
+    
+# Data collection and retention
+data:
+  # Collection intervals
+  collection_interval: 30  # seconds
+  weather_collection_interval: 900  # 15 minutes
+  analysis_interval: 300  # 5 minutes
+  
+  # Data retention policies
+  retention:
+    raw_data: "30d"
+    hourly_aggregates: "365d"
+    daily_aggregates: "5y"
+    monthly_aggregates: "20y"
+  
+  # Data validation rules
+  validation:
+    max_solar_power: 8.0  # kW (higher than rated for safety)
+    max_load_power: 10.0  # kW
+    max_battery_current: 100  # A
+    min_grid_voltage: 180  # V
+    max_grid_voltage: 260  # V
+    max_battery_temp: 60   # °C
+
+# Analytics and calculations
+analytics:
+  # Consumption analysis
+  consumption_thresholds:
+    low: 1.0   # kW
+    medium: 2.5  # kW
+    high: 4.0   # kW
+    critical: 6.0  # kW
+  
+  # Battery analytics
+  battery_calculations:
+    efficiency_factor: 0.95
+    depth_of_discharge: 0.85  # Use 85% of capacity
+    aging_factor: 0.98  # Annual capacity degradation
+  
+  # Weather correlation
+  weather_analysis:
+    irradiance_threshold: 300  # W/m² minimum for good generation
+    cloud_cover_impact: 0.8   # 80% reduction at 100% cloud cover
+    temperature_coefficient: -0.004  # %/°C efficiency loss per degree
+  
+  # Efficiency calculations
+  efficiency_metrics:
+    panel_to_battery: 0.85
+    battery_to_load: 0.95
+    panel_to_load_direct: 0.92
+    overall_system: 0.80
+
+# Notification settings
+notifications:
+  # Default notification preferences
+  defaults:
+    enabled: true
+    sound: true
+    vibration: true
+    show_preview: true
+  
+  # Delivery retry settings
+  delivery:
+    max_retries: 3
+    retry_delay: 300  # 5 minutes
+    timeout: 30  # seconds
+  
+  # Rate limiting
+  rate_limits:
+    max_per_hour: 20
+    max_per_day: 100
+    burst_limit: 5
+
+# Security and authentication
+security:
+  # Session settings
+  session_timeout: 3600  # 1 hour
+  remember_me_duration: 604800  # 1 week
+  
+  # API security
+  api_rate_limit: 100  # requests per minute
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+  
+  # Password requirements
+  password_policy:
+    min_length: 8
+    require_uppercase: true
+    require_lowercase: true
+    require_numbers: true
+    require_symbols: false
+
+# Mobile app settings
+mobile:
+  # Push notification settings
+  push_notifications:
+    enabled: true
+    badge_updates: true
+    background_sync: true
+  
+  # Offline mode
+  offline:
+    cache_duration: 86400  # 24 hours
+    max_cache_size: 50  # MB
+    sync_on_connection: true
+  
+  # App behavior
+  app_settings:
+    auto_refresh: true
+    haptic_feedback: true
+    dark_mode_auto: true
+
+# Integration settings
+integrations:
+  # Weather service
+  weather:
+    provider: "openweathermap"
+    update_interval: 900  # 15 minutes
+    forecast_days: 5
+    alerts_enabled: true
+  
+  # Third-party services
+  external_apis:
+    enabled: false
+    pvgis_integration: false  # European solar data
+    solcast_integration: false  # Solar forecasting
+  
+  # Home automation
+  home_automation:
+    mqtt_enabled: false
+    home_assistant_integration: false
+    smart_switch_control: false
+
+# Performance and optimization
+performance:
+  # Database optimization
+  database:
+    connection_pool_size: 10
+    query_timeout: 30  # seconds
+    batch_size: 1000
+  
+  # Caching
+  cache:
+    enabled: true
+    ttl: 300  # 5 minutes
+    max_size: 100  # MB
+  
+  # Resource limits
+  limits:
+    max_memory_usage: 1024  # MB
+    max_cpu_usage: 80  # %
+    max_disk_usage: 90  # %
+
+# Logging and monitoring
+logging:
+  # Log levels
+  level: "INFO"
+  detailed_logging: false
+  
+  # Log retention
+  retention:
+    application_logs: "30d"
+    error_logs: "90d"
+    access_logs: "7d"
+  
+  # Monitoring
+  monitoring:
+    health_check_interval: 60  # seconds
+    metrics_collection: true
+    performance_tracking: true
+
+# Backup and maintenance
+maintenance:
+  # Automatic backups
+  backup:
+    enabled: true
+    interval: "daily"
+    retention: "30d"
+    compression: true
+  
+  # System maintenance
+  system:
+    auto_restart: false
+    maintenance_window: "02:00-04:00"
+    update_check_interval: "weekly"
+  
+  # Data cleanup
+  cleanup:
+    temp_files: true
+    old_logs: true
+    expired_cache: true
+
+# Customization options
+customization:
+  # Dashboard layout
+  layout:
+    compact_mode: false
+    hide_inactive_widgets: false
+    custom_widget_order: []
+  
+  # User interface
+  ui:
+    animation_speed: "normal"
+    font_size: "medium"
+    high_contrast: false
+  
+  # Language and localization
+  localization:
+    language: "en"
+    date_format: "YYYY-MM-DD"
+    time_format: "24h"
+    number_format: "1,234.56"

@@ -1,0 +1,321 @@
+# Sunsynk Solar Dashboard Alert Configuration
+# Configure time-based and conditional alerts for your solar system
+
+# Global alert settings
+global:
+  enabled: true
+  default_cooldown: "1h"
+  max_alerts_per_hour: 10
+  time_zone: "Africa/Johannesburg"
+  
+# Notification channels configuration
+channels:
+  whatsapp:
+    enabled: true
+    priority: 1  # Higher priority notifications use this channel
+    
+  sms:
+    enabled: true
+    priority: 2
+    
+  push:
+    enabled: true
+    priority: 3
+    
+  voice_call:
+    enabled: true
+    priority: 0  # Highest priority - critical alerts only
+    
+  email:
+    enabled: false
+    priority: 4
+
+# Battery status alerts
+battery_alerts:
+  battery_full:
+    enabled: true
+    condition: "battery_soc >= 100"
+    severity: "info"
+    cooldown: "6h"
+    channels: ["push"]
+    message: "🔋 Battery fully charged: {battery_soc}%"
+    description: "Notify when battery reaches 100% charge"
+    
+  battery_low_daytime:
+    enabled: true
+    condition: "battery_soc < 65 AND hour >= 11 AND hour <= 18"
+    severity: "warning"
+    cooldown: "1h"
+    channels: ["whatsapp", "push"]
+    message: "⚠️ Battery low during peak hours: {battery_soc}% at {time}"
+    description: "Alert when battery is low during prime solar hours (11 AM - 6 PM)"
+    
+  battery_critical_high_usage:
+    enabled: true
+    condition: "battery_soc <= 15 AND load_power > 0.4"
+    severity: "critical"
+    cooldown: "5min"
+    channels: ["voice_call", "sms", "whatsapp"]
+    message: "🚨 URGENT: Battery critical {battery_soc}% with high usage {load_power}kW"
+    description: "Critical alert for low battery with high power consumption"
+    
+  battery_moderate_low:
+    enabled: true
+    condition: "battery_soc <= 25 AND battery_soc > 15"
+    severity: "warning"
+    cooldown: "2h"
+    channels: ["whatsapp", "push"]
+    message: "⚠️ Battery getting low: {battery_soc}%"
+    description: "Warning when battery drops to 25%"
+    
+  battery_discharge_rate_high:
+    enabled: true
+    condition: "battery_depletion_rate > 15"  # %/hour
+    severity: "warning"
+    cooldown: "30min"
+    channels: ["push", "whatsapp"]
+    message: "⚡ High battery discharge rate: {battery_depletion_rate:.1f}%/hour"
+    description: "Alert when battery is discharging faster than 15%/hour"
+
+# Weather-based alerts
+weather_alerts:
+  low_sunshine_projected:
+    enabled: true
+    condition: "sunshine_hours_today < 4"
+    severity: "warning"
+    cooldown: "24h"
+    time_check: "06:00"  # Check once in the morning
+    channels: ["push"]
+    message: "☁️ Low sunshine projected today: {sunshine_hours_today:.1f} hours"
+    description: "Daily alert for low expected sunshine hours"
+    
+  continuous_low_sunshine:
+    enabled: true
+    condition: "solar_irradiance < 200 AND duration > 2h"
+    severity: "warning"
+    cooldown: "4h"
+    channels: ["whatsapp"]
+    message: "☁️ Low sunshine for {duration}: {solar_irradiance:.0f}W/m²"
+    description: "Alert for extended periods of low solar irradiance"
+    
+  excellent_solar_day:
+    enabled: true
+    condition: "sunshine_hours_today > 8 AND cloud_cover < 20"
+    severity: "info"
+    cooldown: "24h"
+    time_check: "09:00"
+    channels: ["push"]
+    message: "☀️ Excellent solar day ahead: {sunshine_hours_today:.1f}h sunshine expected!"
+    description: "Positive notification for great solar days"
+    
+  storm_warning:
+    enabled: true
+    condition: "wind_speed > 15 AND weather_condition == 'thunderstorm'"
+    severity: "warning"
+    cooldown: "6h"
+    channels: ["sms", "whatsapp"]
+    message: "⛈️ Storm warning: {wind_speed:.0f}m/s winds, check system safety"
+    description: "Alert for severe weather that might affect solar system"
+
+# Consumption and usage alerts
+consumption_alerts:
+  high_consumption_threshold:
+    enabled: true
+    condition: "load_power > {consumption_threshold}"  # User-defined threshold
+    severity: "warning"
+    cooldown: "30min"
+    channels: ["push"]
+    message: "🏠 High consumption: {load_power:.1f}kW (threshold: {consumption_threshold}kW)"
+    description: "Alert when power consumption exceeds user-defined threshold"
+    
+  battery_depletion_risk:
+    enabled: true
+    condition: "projected_runtime < 2h AND battery_soc > 15"
+    severity: "warning"
+    cooldown: "1h"
+    channels: ["whatsapp", "push"]
+    message: "⏰ Battery may deplete in {projected_runtime:.1f}h at current usage"
+    description: "Warning when battery runtime is critically short"
+    
+  geyser_usage_opportunity:
+    enabled: true
+    condition: "battery_soc > 80 AND solar_power > 2.0 AND hour >= 10 AND hour <= 14"
+    severity: "info"
+    cooldown: "4h"
+    channels: ["push"]
+    message: "🚿 Good time for geyser usage: {geyser_runtime_available:.0f}min available"
+    description: "Suggest optimal geyser usage timing"
+    
+  peak_time_usage_warning:
+    enabled: true
+    condition: "hour >= 17 AND hour <= 20 AND load_power > 1.5"
+    severity: "warning"
+    cooldown: "1h"
+    channels: ["push"]
+    message: "⚡ High usage during peak hours: {load_power:.1f}kW"
+    description: "Warn about high consumption during peak electricity rates"
+
+# System health alerts
+system_alerts:
+  grid_outage:
+    enabled: true
+    condition: "grid_power == 0 AND grid_voltage < 180 AND duration > 5min"
+    severity: "critical"
+    cooldown: "15min"
+    channels: ["sms", "whatsapp", "voice_call"]
+    message: "⚡ Grid outage detected for {duration}"
+    description: "Alert when grid power is lost for extended period"
+    
+  grid_restored:
+    enabled: true
+    condition: "grid_power != 0 AND grid_voltage > 200 AND previous_grid_outage"
+    severity: "info"
+    cooldown: "1h"
+    channels: ["push", "whatsapp"]
+    message: "✅ Grid power restored: {grid_voltage:.0f}V"
+    description: "Notification when grid power is restored after outage"
+    
+  inverter_offline:
+    enabled: true
+    condition: "last_update > 10min"
+    severity: "critical"
+    cooldown: "30min"
+    channels: ["sms", "whatsapp"]
+    message: "📡 Inverter {inverter_sn} appears offline (no data for {last_update})"
+    description: "Alert when inverter stops sending data"
+    
+  high_grid_frequency:
+    enabled: true
+    condition: "grid_frequency > 52.0"
+    severity: "warning"
+    cooldown: "1h"
+    channels: ["whatsapp"]
+    message: "⚡ High grid frequency: {grid_frequency:.2f}Hz"
+    description: "Alert for abnormal grid frequency"
+    
+  low_grid_voltage:
+    enabled: true
+    condition: "grid_voltage < 200 AND grid_voltage > 0"
+    severity: "warning"
+    cooldown: "30min"
+    channels: ["push", "whatsapp"]
+    message: "⚡ Low grid voltage: {grid_voltage:.0f}V"
+    description: "Alert for low grid voltage conditions"
+
+# Financial and efficiency alerts
+financial_alerts:
+  daily_savings_milestone:
+    enabled: true
+    condition: "daily_cost_savings > 50"  # Currency unit
+    severity: "info"
+    cooldown: "24h"
+    time_check: "18:00"  # Check in evening
+    channels: ["push"]
+    message: "💰 Great savings today: R{daily_cost_savings:.0f}!"
+    description: "Celebrate good daily savings"
+    
+  monthly_generation_record:
+    enabled: true
+    condition: "monthly_generation > previous_month_record"
+    severity: "info"
+    cooldown: "24h"
+    channels: ["push", "whatsapp"]
+    message: "🏆 New monthly generation record: {monthly_generation:.0f}kWh!"
+    description: "Celebrate monthly generation records"
+    
+  low_efficiency_warning:
+    enabled: true
+    condition: "daily_efficiency < 70 AND sunshine_hours > 6"
+    severity: "warning"
+    cooldown: "24h"
+    time_check: "17:00"
+    channels: ["whatsapp"]
+    message: "📉 Low system efficiency today: {daily_efficiency:.0f}% (expected better with {sunshine_hours:.1f}h sunshine)"
+    description: "Alert when system efficiency is lower than expected"
+
+# Time-based scheduled checks
+scheduled_checks:
+  morning_report:
+    enabled: true
+    time: "07:00"
+    channels: ["push"]
+    message: "🌅 Morning Report: Battery {battery_soc}%, {sunshine_hours:.1f}h sunshine expected"
+    description: "Daily morning status update"
+    
+  evening_summary:
+    enabled: true
+    time: "19:00"
+    channels: ["push"]
+    message: "🌇 Daily Summary: Generated {daily_generation:.1f}kWh, Saved R{daily_cost_savings:.0f}"
+    description: "Daily evening summary"
+    
+  weekly_performance:
+    enabled: true
+    day: "sunday"
+    time: "18:00"
+    channels: ["whatsapp"]
+    message: "📊 Weekly Performance: Avg efficiency {weekly_avg_efficiency:.0f}%, Total generation {weekly_generation:.0f}kWh"
+    description: "Weekly performance summary"
+
+# Advanced alert conditions
+advanced_conditions:
+  # Custom formulas for complex conditions
+  battery_optimization_alert:
+    enabled: true
+    condition: |
+      (hour >= 12 AND hour <= 15) AND 
+      (solar_power > 3.0) AND 
+      (battery_soc < 90) AND 
+      (weather_condition == 'clear')
+    severity: "info"
+    cooldown: "2h"
+    channels: ["push"]
+    message: "☀️ Optimal charging conditions: {solar_power:.1f}kW available, battery at {battery_soc}%"
+    description: "Alert for optimal battery charging opportunities"
+    
+  load_shedding_preparation:
+    enabled: true
+    condition: |
+      (battery_soc > 85) AND 
+      (hour >= 16 AND hour <= 18) AND 
+      (weekday IN ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'])
+    severity: "info"
+    cooldown: "24h"
+    channels: ["push"]
+    message: "🔄 System ready for potential load shedding: Battery {battery_soc}%"
+    description: "Confirmation that system is prepared for load shedding"
+
+# Alert escalation rules
+escalation:
+  # Escalate critical alerts if not acknowledged
+  critical_escalation:
+    enabled: true
+    initial_channels: ["push", "whatsapp"]
+    escalation_delay: "10min"
+    escalated_channels: ["sms", "voice_call"]
+    max_escalations: 3
+    
+  # Notification delivery failure handling
+  delivery_failure:
+    enabled: true
+    retry_attempts: 3
+    retry_delay: "5min"
+    fallback_channels: ["sms"]
+
+# User preferences
+user_preferences:
+  quiet_hours:
+    enabled: true
+    start_time: "22:00"
+    end_time: "06:00"
+    allowed_severities: ["critical"]  # Only critical alerts during quiet hours
+    
+  vacation_mode:
+    enabled: false
+    reduced_notifications: true
+    essential_only: ["critical", "system_alerts"]
+    
+  notification_grouping:
+    enabled: true
+    group_window: "15min"  # Group similar alerts within 15 minutes
+    max_grouped_alerts: 5
