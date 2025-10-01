@@ -118,8 +118,9 @@ services:
     container_name: sunsynk-nginx
     restart: always
     ports:
-      - "80:80"
-      - "443:443"
+      - "8080:80"
+    networks:
+      - sunsynk-network
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
