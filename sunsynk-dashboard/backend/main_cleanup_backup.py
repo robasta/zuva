@@ -1,44 +1,97 @@
 """
-Sunsynk Solar Dashboard - Phase 4 Backend API
-FastAPI backend with InfluxDB integration for historical data analytics
-Real-time monitoring with machine learning predictions
+Sunsynk Solar Dashboard - Phase 6 Backend API
+FastAPI backend with InfluxDB integration and advanced ML analytics
+Real-time monitoring with machine learning predictions and optimization
 """
 
-import os
-import sys
-import asyncio
-import json
 import logging
-from typing import Dict, Any, List, Optional
+import sys
+import os
 from datetime import datetime, timedelta
-from contextlib import asynccontextmanager
-from pathlib import Path
-import aiohttp
+from typing import List, Dict, Any
+import asyncio
 import pandas as pd
 import numpy as np
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import StandardScaler
-from influxdb_client import InfluxDBClient, Point, WritePrecision
-from influxdb_client.client.write_api import SYNCHRONOUS
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
-import jwt
-
-# Add the sunsynk package to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-# Import Sunsynk client
-from sunsynk.client import SunsynkClient
-
-# Configure logging
+# Configure logging first
 logging.basicConfig(
-    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler("dashboard.log")
+    ]
 )
 logger = logging.getLogger(__name__)
+
+# Add parent directory to sys.path to import local modules
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, parent_dir)
+
+# Core imports
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
+import jwt
+from dotenv import load_dotenv
+import uvicorn
+import json
+import traceback
+
+# Add parent directory to sys.path to import local modules
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, parent_dir)
+
+# Core imports
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
+import jwt
+from dotenv import load_dotenv
+import uvicorn
+import json
+import traceback
+
+# Phase 6 Analytics Modules - Import with error handling
+PHASE6_AVAILABLE = False
+try:
+    from analytics.weather_correlator import AdvancedWeatherAnalyzer
+    from analytics.consumption_ml import ConsumptionMLAnalyzer
+    from analytics.battery_optimizer import BatteryOptimizer
+    weather_analyzer = AdvancedWeatherAnalyzer()
+    consumption_analyzer = ConsumptionMLAnalyzer()
+    battery_optimizer = BatteryOptimizer()
+    PHASE6_AVAILABLE = True
+    logger.info("✅ Phase 6 Advanced Analytics modules loaded successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Phase 6 Analytics modules not available: {e}")
+except Exception as e:
+    logger.warning(f"⚠️ Phase 6 Analytics initialization error: {e}")
+
+# Local imports
+try:
+    from components.auth import AuthManager
+    from components.influx_manager import InfluxManager
+    from components.data_collector import RealDataCollector
+    logger.info("✅ All core components loaded successfully")
+except ImportError as e:
+    logger.error(f"❌ Failed to import core components: {e}")
+    sys.exit(1)
+
+# Import Phase 6 Analytics Modules
+try:
+    from analytics.weather_correlator import weather_analyzer
+    from analytics.consumption_ml import consumption_analyzer
+    from analytics.battery_optimizer import battery_optimizer
+    PHASE6_AVAILABLE = True
+    logger.info("✅ Phase 6 analytics modules loaded successfully")
+except ImportError as e:
+    logger.warning(f"Phase 6 analytics modules not available: {e}")
+    PHASE6_AVAILABLE = False
 
 # Configuration
 JWT_SECRET = os.getenv("JWT_SECRET_KEY", "your-super-secret-jwt-key-change-this")
@@ -47,25 +100,23 @@ JWT_EXPIRATION_HOURS = 24
 
 # InfluxDB Configuration  
 INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://localhost:8086")
-INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "admin-token")
+INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "T72osJpuV_vwsv-8bHauVAjO5R_-HgTJM3iAGsGRG0dI-0MnqvELTTHuBSWHKhRP5_U5IMprDKVC3zawzpLHCA==")
 INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "sunsynk")
 INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "solar_metrics")
 
 # Security
 security = HTTPBearer()
 
-# Password hashing - simple hash for demo
+# Password hashing
 import hashlib
 
 def hash_password(password: str) -> str:
-    """Simple password hashing for demo purposes"""
     return hashlib.sha256(password.encode()).hexdigest()
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password against hash"""
     return hash_password(plain_password) == hashed_password
 
-# Demo user credentials (in production, use proper user management)
+# Demo users
 DEMO_USERS = {
     "admin": {
         "username": "admin",
@@ -109,28 +160,6 @@ class WebSocketMessage(BaseModel):
     type: str
     data: Dict[Any, Any]
 
-class HistoricalDataPoint(BaseModel):
-    timestamp: datetime
-    solar_power: float
-    battery_level: float
-    grid_power: float
-    consumption: float
-    battery_power: float
-    temperature: float
-
-class PredictionData(BaseModel):
-    timestamp: datetime
-    predicted_solar: float
-    predicted_consumption: float
-    confidence: float
-
-class AnalyticsResponse(BaseModel):
-    data_points: List[HistoricalDataPoint]
-    total_points: int
-    avg_solar_power: float
-    avg_consumption: float
-    energy_efficiency: float
-
 # WebSocket Connection Manager
 class ConnectionManager:
     def __init__(self):
@@ -162,7 +191,6 @@ class ConnectionManager:
                 logger.error(f"Error broadcasting to connection: {e}")
                 disconnected.append(connection)
         
-        # Remove disconnected connections
         for conn in disconnected:
             self.disconnect(conn)
 
@@ -170,8 +198,6 @@ manager = ConnectionManager()
 
 # InfluxDB Integration
 class InfluxDBManager:
-    """Manages InfluxDB operations for historical data storage and analytics"""
-    
     def __init__(self):
         self.client = None
         self.write_api = None
@@ -179,7 +205,6 @@ class InfluxDBManager:
         self.connected = False
         
     async def connect(self):
-        """Connect to InfluxDB"""
         try:
             self.client = InfluxDBClient(
                 url=INFLUXDB_URL,
@@ -189,7 +214,7 @@ class InfluxDBManager:
             self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
             self.query_api = self.client.query_api()
             
-            # Test connection
+            # Test connection by listing buckets
             buckets = self.client.buckets_api().find_buckets()
             self.connected = True
             logger.info(f"✅ Connected to InfluxDB at {INFLUXDB_URL}")
@@ -201,13 +226,11 @@ class InfluxDBManager:
             return False
     
     def write_metrics(self, metrics_data: dict):
-        """Write solar metrics to InfluxDB"""
         if not self.connected or not self.write_api:
             logger.warning("InfluxDB not connected, skipping write")
             return False
             
         try:
-            # Create data points
             points = []
             
             # Solar metrics point
@@ -248,7 +271,6 @@ class InfluxDBManager:
             return False
     
     def query_historical_data(self, hours: int = 24) -> List[Dict]:
-        """Query historical data from InfluxDB"""
         if not self.connected or not self.query_api:
             logger.warning("InfluxDB not connected, returning empty data")
             return []
@@ -263,7 +285,7 @@ class InfluxDBManager:
                                    r["_field"] == "grid_power" or 
                                    r["_field"] == "consumption" or
                                    r["_field"] == "battery_power")
-                |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
+                |> aggregateWindow(every: 30m, fn: mean, createEmpty: false)
                 |> yield(name: "mean")
             '''
             
@@ -291,6 +313,8 @@ class InfluxDBManager:
                     if field not in data_point:
                         data_point[field] = 0.0
                 
+                # Add temperature (from weather data or default)
+                data_point['temperature'] = 22.0  # Default temp
                 historical_data.append(data_point)
             
             logger.info(f"📈 Retrieved {len(historical_data)} historical data points")
@@ -301,9 +325,8 @@ class InfluxDBManager:
             return []
     
     def get_analytics_summary(self, hours: int = 24) -> Dict:
-        """Get analytics summary from InfluxDB"""
         if not self.connected:
-            return {}
+            return {"total_points": 0, "avg_solar_power": 0, "avg_consumption": 0, "energy_efficiency": 0}
             
         try:
             query = f'''
@@ -311,8 +334,7 @@ class InfluxDBManager:
                 |> range(start: -{hours}h)
                 |> filter(fn: (r) => r["_measurement"] == "solar_metrics")
                 |> filter(fn: (r) => r["_field"] == "solar_power" or 
-                                   r["_field"] == "consumption" or
-                                   r["_field"] == "battery_level")
+                                   r["_field"] == "consumption")
                 |> mean()
                 |> yield(name: "mean")
             '''
@@ -322,7 +344,6 @@ class InfluxDBManager:
             if result.empty:
                 return {"total_points": 0, "avg_solar_power": 0, "avg_consumption": 0, "energy_efficiency": 0}
             
-            # Calculate summary statistics
             summary = {"total_points": len(result)}
             
             for _, row in result.iterrows():
@@ -333,8 +354,6 @@ class InfluxDBManager:
                     summary['avg_solar_power'] = value
                 elif field == 'consumption':
                     summary['avg_consumption'] = value
-                elif field == 'battery_level':
-                    summary['avg_battery_level'] = value
             
             # Calculate energy efficiency
             if summary.get('avg_consumption', 0) > 0:
@@ -348,161 +367,8 @@ class InfluxDBManager:
             logger.error(f"❌ Failed to get analytics summary: {e}")
             return {"total_points": 0, "avg_solar_power": 0, "avg_consumption": 0, "energy_efficiency": 0}
 
-# Machine Learning Analytics
-class MLAnalytics:
-    """Machine learning models for solar energy predictions"""
-    
-    def __init__(self, influx_manager: InfluxDBManager):
-        self.influx_manager = influx_manager
-        self.solar_model = None
-        self.consumption_model = None
-        self.scaler = StandardScaler()
-        self.last_trained = None
-        
-    def prepare_features(self, data: List[Dict]) -> np.ndarray:
-        """Prepare features for ML models"""
-        if not data:
-            return np.array([])
-        
-        features = []
-        for point in data:
-            timestamp = point['timestamp']
-            if isinstance(timestamp, str):
-                timestamp = pd.to_datetime(timestamp)
-            
-            # Time-based features
-            hour = timestamp.hour
-            day_of_week = timestamp.weekday()
-            month = timestamp.month
-            
-            # Cyclical encoding for time features
-            hour_sin = np.sin(2 * np.pi * hour / 24)
-            hour_cos = np.cos(2 * np.pi * hour / 24)
-            day_sin = np.sin(2 * np.pi * day_of_week / 7)
-            day_cos = np.cos(2 * np.pi * day_of_week / 7)
-            month_sin = np.sin(2 * np.pi * month / 12)
-            month_cos = np.cos(2 * np.pi * month / 12)
-            
-            # Historical values
-            solar_power = point.get('solar_power', 0)
-            consumption = point.get('consumption', 0)
-            battery_level = point.get('battery_level', 50)
-            
-            feature_vector = [
-                hour_sin, hour_cos, day_sin, day_cos, month_sin, month_cos,
-                solar_power, consumption, battery_level
-            ]
-            
-            features.append(feature_vector)
-        
-        return np.array(features)
-    
-    def train_models(self):
-        """Train ML models with historical data"""
-        try:
-            # Get training data from last 7 days
-            historical_data = self.influx_manager.query_historical_data(hours=168)  # 7 days
-            
-            if len(historical_data) < 10:
-                logger.warning("Insufficient data for ML training")
-                return False
-            
-            # Prepare features and targets
-            features = self.prepare_features(historical_data)
-            
-            if features.size == 0:
-                logger.warning("No features prepared for ML training")
-                return False
-            
-            # Prepare targets
-            solar_targets = np.array([point.get('solar_power', 0) for point in historical_data])
-            consumption_targets = np.array([point.get('consumption', 0) for point in historical_data])
-            
-            # Scale features
-            features_scaled = self.scaler.fit_transform(features)
-            
-            # Train solar prediction model
-            self.solar_model = LinearRegression()
-            self.solar_model.fit(features_scaled, solar_targets)
-            
-            # Train consumption prediction model  
-            self.consumption_model = LinearRegression()
-            self.consumption_model.fit(features_scaled, consumption_targets)
-            
-            self.last_trained = datetime.now()
-            logger.info(f"✅ ML models trained with {len(historical_data)} data points")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ ML training failed: {e}")
-            return False
-    
-    def predict_future(self, hours: int = 24) -> List[Dict]:
-        """Generate predictions for future hours"""
-        if not self.solar_model or not self.consumption_model:
-            logger.warning("ML models not trained, generating demo predictions")
-            return self._generate_demo_predictions(hours)
-        
-        try:
-            predictions = []
-            now = datetime.now()
-            
-            for i in range(hours):
-                future_time = now + timedelta(hours=i)
-                
-                # Create feature vector for future time
-                hour = future_time.hour
-                day_of_week = future_time.weekday()
-                month = future_time.month
-                
-                hour_sin = np.sin(2 * np.pi * hour / 24)
-                hour_cos = np.cos(2 * np.pi * hour / 24)
-                day_sin = np.sin(2 * np.pi * day_of_week / 7)
-                day_cos = np.cos(2 * np.pi * day_of_week / 7)
-                month_sin = np.sin(2 * np.pi * month / 12)
-                month_cos = np.cos(2 * np.pi * month / 12)
-                
-                # Use recent averages for historical features
-                recent_data = self.influx_manager.query_historical_data(hours=24)
-                if recent_data:
-                    avg_solar = np.mean([p.get('solar_power', 0) for p in recent_data[-5:]])
-                    avg_consumption = np.mean([p.get('consumption', 0) for p in recent_data[-5:]])
-                    avg_battery = np.mean([p.get('battery_level', 50) for p in recent_data[-5:]])
-                else:
-                    avg_solar = 0
-                    avg_consumption = 1.5
-                    avg_battery = 50
-                
-                feature_vector = np.array([[hour_sin, hour_cos, day_sin, day_cos, month_sin, month_cos,
-                                          avg_solar, avg_consumption, avg_battery]])
-                
-                # Scale features
-                feature_scaled = self.scaler.transform(feature_vector)
-                
-                # Make predictions
-                predicted_solar = max(0, self.solar_model.predict(feature_scaled)[0])
-                predicted_consumption = max(0, self.consumption_model.predict(feature_scaled)[0])
-                
-                # Calculate confidence (simplified)
-                base_confidence = 0.85
-                time_penalty = min(0.3, i * 0.01)  # Confidence decreases with time
-                confidence = max(0.5, base_confidence - time_penalty)
-                
-                predictions.append({
-                    "timestamp": future_time,
-                    "predicted_solar": round(predicted_solar, 2),
-                    "predicted_consumption": round(predicted_consumption, 2),
-                    "confidence": round(confidence, 2)
-                })
-            
-            return predictions\n            \n        except Exception as e:\n            logger.error(f\"❌ Prediction failed: {e}\")\n            return self._generate_demo_predictions(hours)\n    \n    def _generate_demo_predictions(self, hours: int) -> List[Dict]:\n        \"\"\"Generate demo predictions when ML models are unavailable\"\"\"\n        predictions = []\n        now = datetime.now()\n        \n        for i in range(hours):\n            timestamp = now + timedelta(hours=i)\n            hour = timestamp.hour\n            \n            import random\n            import math\n            \n            # Predict solar generation based on time of day\n            if 6 <= hour <= 18:\n                solar_factor = math.sin(math.pi * (hour - 6) / 12)\n                predicted_solar = 4.5 * solar_factor + random.uniform(-0.2, 0.2)\n            else:\n                predicted_solar = 0.0\n            \n            # Predict consumption based on typical patterns\n            if 6 <= hour <= 8 or 17 <= hour <= 22:  # Morning and evening peaks\n                predicted_consumption = 2.0 + random.uniform(-0.3, 0.5)\n            else:\n                predicted_consumption = 1.2 + random.uniform(-0.2, 0.4)\n            \n            predictions.append({\n                \"timestamp\": timestamp,\n                \"predicted_solar\": round(max(0, predicted_solar), 2),\n                \"predicted_consumption\": round(predicted_consumption, 2),\n                \"confidence\": round(random.uniform(0.7, 0.8), 2)  # Lower confidence for demo\n            })\n        \n        return predictions
-
-# Global instances\ninflux_manager = InfluxDBManager()\nml_analytics = MLAnalytics(influx_manager)
-
-# Background tasks
+# Real Sunsynk Collector
 class RealSunsynkCollector:
-    """Real Sunsynk data collector with InfluxDB integration."""
-    
     def __init__(self):
         # Real credentials
         self.username = 'robert.dondo@gmail.com'
@@ -514,7 +380,6 @@ class RealSunsynkCollector:
         self.last_update = None
         
     async def collect_weather_data(self):
-        """Collect weather data from OpenWeatherMap."""
         try:
             url = f"http://api.openweathermap.org/data/2.5/weather"
             params = {
@@ -545,7 +410,6 @@ class RealSunsynkCollector:
             }
     
     async def collect_sunsynk_data(self, client, inverter_sn):
-        """Collect real-time data from Sunsynk inverter."""
         try:
             # Get real-time data
             battery = await client.get_inverter_realtime_battery(inverter_sn)
@@ -576,7 +440,6 @@ class RealSunsynkCollector:
             return None
     
     async def run_collection_cycle(self):
-        """Run a single data collection cycle with InfluxDB storage."""
         try:
             async with SunsynkClient(self.username, self.password) as client:
                 # Get inverter
@@ -628,7 +491,6 @@ class RealSunsynkCollector:
             return False
     
     def get_current_data(self):
-        """Get the latest collected data."""
         if not self.latest_data:
             return None
             
@@ -654,9 +516,11 @@ class RealSunsynkCollector:
             }
         }
 
-# Global collector instance
+# Global instances
+influx_manager = InfluxDBManager()
 real_collector = RealSunsynkCollector()
 
+# Background Tasks
 class BackgroundTasks:
     def __init__(self):
         self.running = False
@@ -667,7 +531,7 @@ class BackgroundTasks:
             return
         
         self.running = True
-        logger.info("Starting Phase 4 background tasks...")
+        logger.info("Starting Phase 4 background tasks with InfluxDB...")
         
         # Initialize InfluxDB connection
         await influx_manager.connect()
@@ -675,10 +539,6 @@ class BackgroundTasks:
         # Start real data collection task
         task1 = asyncio.create_task(self.generate_real_data())
         self.tasks.append(task1)
-        
-        # Start ML training task (runs every 6 hours)
-        task2 = asyncio.create_task(self.train_ml_models())
-        self.tasks.append(task2)
 
     async def stop_background_tasks(self):
         self.running = False
@@ -694,7 +554,6 @@ class BackgroundTasks:
         self.tasks.clear()
 
     async def generate_real_data(self):
-        """Collect real Sunsynk data and broadcast to WebSocket clients"""
         logger.info("🚀 Starting real Sunsynk data collection with InfluxDB storage...")
         
         while self.running:
@@ -724,37 +583,13 @@ class BackgroundTasks:
             except Exception as e:
                 logger.error(f"❌ Error in real data collection: {e}")
                 await asyncio.sleep(60)  # Wait longer on error
-    
-    async def train_ml_models(self):
-        """Train ML models periodically"""
-        logger.info("🤖 Starting ML model training task...")
-        
-        # Initial training after 5 minutes (allow some data to accumulate)
-        await asyncio.sleep(300)
-        
-        while self.running:
-            try:
-                logger.info("🎯 Starting ML model training...")
-                success = ml_analytics.train_models()
-                
-                if success:
-                    logger.info("✅ ML models trained successfully")
-                else:
-                    logger.warning("⚠️ ML model training failed")
-                
-                # Train every 6 hours
-                await asyncio.sleep(6 * 3600)
-                
-            except Exception as e:
-                logger.error(f"❌ Error in ML training: {e}")
-                await asyncio.sleep(3600)  # Retry in 1 hour on error
 
 background_tasks = BackgroundTasks()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    logger.info("Starting Sunsynk Dashboard API...")
+    logger.info("Starting Sunsynk Dashboard API Phase 4...")
     await background_tasks.start_background_tasks()
     yield
     # Shutdown
@@ -763,9 +598,9 @@ async def lifespan(app: FastAPI):
 
 # FastAPI app initialization
 app = FastAPI(
-    title="Sunsynk Solar Dashboard API - Phase 4",
-    description="Advanced solar monitoring API with InfluxDB analytics and ML predictions",
-    version="4.0.0",
+    title="Sunsynk Solar Dashboard API - Phase 6",
+    description="Advanced solar monitoring API with InfluxDB analytics and ML-powered optimization",
+    version="6.0.0",
     lifespan=lifespan
 )
 
@@ -778,8 +613,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Authentication helpers removed - using direct verify_password function
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
@@ -809,7 +642,6 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
 # API Routes
 @app.get("/api/health")
 async def health_check():
-    """API health check endpoint with Phase 4 components"""
     return {
         "status": "healthy",
         "timestamp": datetime.now(),
@@ -820,7 +652,6 @@ async def health_check():
             "websocket": "online",
             "background_tasks": background_tasks.running,
             "influxdb": "connected" if influx_manager.connected else "disconnected",
-            "ml_analytics": "trained" if ml_analytics.last_trained else "not_trained",
             "real_data_collection": "active" if real_collector.last_update else "inactive"
         },
         "data_sources": {
@@ -828,18 +659,11 @@ async def health_check():
             "weather_api": "active",
             "influxdb_storage": influx_manager.connected,
             "historical_data_points": len(influx_manager.query_historical_data(24)) if influx_manager.connected else 0
-        },
-        "ml_status": {
-            "models_trained": ml_analytics.last_trained is not None,
-            "last_training": ml_analytics.last_trained,
-            "solar_model_available": ml_analytics.solar_model is not None,
-            "consumption_model_available": ml_analytics.consumption_model is not None
         }
     }
 
 @app.post("/api/auth/login", response_model=LoginResponse)
 async def login(login_data: LoginRequest):
-    """User authentication endpoint"""
     user = DEMO_USERS.get(login_data.username)
     if not user or not verify_password(login_data.password, user["password"]):
         raise HTTPException(
@@ -860,8 +684,6 @@ async def login(login_data: LoginRequest):
 
 @app.get("/api/dashboard/current")
 async def get_current_dashboard_data(user: dict = Depends(verify_token)):
-    """Get current dashboard metrics from real Sunsynk data"""
-    
     # Try to get real data first
     current_data = real_collector.get_current_data()
     
@@ -904,7 +726,6 @@ async def get_dashboard_history(
     hours: int = 24,
     user: dict = Depends(verify_token)
 ):
-    """Get historical dashboard data from InfluxDB"""
     logger.info(f"📊 Fetching {hours} hours of historical data from InfluxDB")
     
     # Try to get real historical data from InfluxDB
@@ -953,299 +774,383 @@ async def get_dashboard_history(
     
     return {"history": history, "source": "generated"}
 
-@app.get("/api/analytics/historical", response_model=AnalyticsResponse)
-async def get_analytics_historical(
+@app.get("/api/analytics/summary")
+async def get_analytics_summary(
     hours: int = 24,
     user: dict = Depends(verify_token)
 ):
-    """Get comprehensive analytics from historical data"""
-    logger.info(f"📈 Generating analytics for {hours} hours")
+    logger.info(f"📈 Generating analytics summary for {hours} hours")
     
-    # Get historical data
-    historical_data = influx_manager.query_historical_data(hours)
-    
-    # Get summary statistics
+    # Get summary statistics from InfluxDB
     summary = influx_manager.get_analytics_summary(hours)
     
-    # Convert to response format
-    data_points = []
-    for point in historical_data:
-        data_points.append(HistoricalDataPoint(
-            timestamp=point['timestamp'],
-            solar_power=point.get('solar_power', 0),
-            battery_level=point.get('battery_level', 0),
-            grid_power=point.get('grid_power', 0),
-            consumption=point.get('consumption', 0),
-            battery_power=point.get('battery_power', 0),
-            temperature=point.get('temperature', 22)
-        ))
+    # Get historical data count
+    historical_data = influx_manager.query_historical_data(hours)
     
-    return AnalyticsResponse(
-        data_points=data_points,
-        total_points=summary.get('total_points', len(data_points)),
-        avg_solar_power=summary.get('avg_solar_power', 0),
-        avg_consumption=summary.get('avg_consumption', 0),
-        energy_efficiency=summary.get('energy_efficiency', 0)
-    )
+    return {
+        "period_hours": hours,
+        "total_data_points": len(historical_data),
+        "avg_solar_power": summary.get('avg_solar_power', 0),
+        "avg_consumption": summary.get('avg_consumption', 0),
+        "energy_efficiency": summary.get('energy_efficiency', 0),
+        "data_source": "influxdb" if historical_data else "none",
+        "analysis_timestamp": datetime.now()
+    }
 
 @app.get("/api/analytics/predictions")
-async def get_ml_predictions(
+async def get_simple_predictions(
     hours: int = 24,
     user: dict = Depends(verify_token)
 ):
-    """Get ML-based predictions for solar generation and consumption"""
-    logger.info(f"🤖 Generating ML predictions for {hours} hours")
+    logger.info(f"🔮 Generating statistical predictions for {hours} hours")
     
-    # Get predictions from ML analytics
-    predictions = ml_analytics.predict_future(hours)
+    # Get recent data for trend analysis
+    recent_data = influx_manager.query_historical_data(48)  # Last 2 days
     
-    # Add model metadata
-    model_info = {
-        "model_last_trained": ml_analytics.last_trained,
-        "model_accuracy": 0.89 if ml_analytics.last_trained else 0.75,  # Higher accuracy for trained models
-        "prediction_method": "machine_learning" if ml_analytics.last_trained else "statistical",
-        "training_data_points": len(influx_manager.query_historical_data(168)) if influx_manager.connected else 0
-    }
+    now = datetime.now()
+    predictions = []
+    
+    # Generate predictions based on historical patterns
+    for i in range(hours):
+        timestamp = now + timedelta(hours=i)
+        hour = timestamp.hour
+        
+        import random
+        import math
+        
+        # Base predictions on time of day
+        if 6 <= hour <= 18:
+            solar_factor = math.sin(math.pi * (hour - 6) / 12)
+            predicted_solar = 4.5 * solar_factor + random.uniform(-0.2, 0.2)
+        else:
+            predicted_solar = 0.0
+        
+        # Consumption based on typical patterns
+        if 6 <= hour <= 8 or 17 <= hour <= 22:  # Morning and evening peaks
+            predicted_consumption = 2.0 + random.uniform(-0.3, 0.5)
+        else:
+            predicted_consumption = 1.2 + random.uniform(-0.2, 0.4)
+        
+        # Adjust based on recent trends if we have data
+        if recent_data:
+            recent_avg_solar = sum(p.get('solar_power', 0) for p in recent_data[-24:]) / min(24, len(recent_data))
+            recent_avg_consumption = sum(p.get('consumption', 0) for p in recent_data[-24:]) / min(24, len(recent_data))
+            
+            # Apply trend adjustment
+            if recent_avg_solar > 0:
+                solar_adjustment = recent_avg_solar / 3.0  # Normalize
+                predicted_solar *= (0.7 + 0.3 * solar_adjustment)
+            
+            if recent_avg_consumption > 0:
+                consumption_adjustment = recent_avg_consumption / 1.5  # Normalize
+                predicted_consumption *= (0.8 + 0.2 * consumption_adjustment)
+        
+        predictions.append({
+            "timestamp": timestamp,
+            "predicted_solar": round(max(0, predicted_solar), 2),
+            "predicted_consumption": round(predicted_consumption, 2),
+            "confidence": round(0.85 if recent_data else 0.75, 2)
+        })
     
     return {
         "predictions": predictions,
-        **model_info
+        "model_type": "statistical_with_trends" if recent_data else "statistical_baseline",
+        "historical_data_points": len(recent_data) if recent_data else 0,
+        "generated_at": now
     }
 
-@app.get("/api/analytics/trends")
-async def get_analytics_trends(
+# Phase 6 Advanced Analytics Endpoints
+@app.get("/api/v6/weather/correlation")
+async def get_weather_correlation_analysis(
     days: int = 7,
     user: dict = Depends(verify_token)
 ):
-    """Get trend analysis for multiple days"""
-    logger.info(f"📊 Analyzing trends for {days} days")
+    """Advanced weather-solar production correlation analysis"""
+    if not PHASE6_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Phase 6 analytics not available")
     
-    # Get extended historical data
-    historical_data = influx_manager.query_historical_data(hours=days * 24)
+    logger.info(f"🌤️ Performing weather correlation analysis for {days} days")
     
-    if not historical_data:
+    try:
+        # Get weather forecasts
+        weather_forecasts = await weather_analyzer.get_weather_forecast(days)
+        
+        # Get historical solar data
+        historical_data = influx_manager.query_historical_data(days * 24)
+        
+        # Perform correlation analysis
+        correlation = weather_analyzer.analyze_weather_solar_correlation(
+            weather_forecasts, historical_data
+        )
+        
+        # Get production forecast
+        production_forecast = weather_analyzer.get_production_forecast(weather_forecasts)
+        
         return {
-            "trends": [],
-            "summary": {
-                "total_energy_generated": 0,
-                "total_energy_consumed": 0,
-                "avg_efficiency": 0,
-                "peak_solar_day": None,
-                "lowest_battery_day": None
-            }
-        }
-    
-    # Group by day and calculate trends
-    daily_trends = {}
-    for point in historical_data:
-        date_key = point['timestamp'].date()
-        if date_key not in daily_trends:
-            daily_trends[date_key] = {
-                'date': date_key,
-                'solar_energy': 0,
-                'consumption': 0,
-                'peak_solar': 0,
-                'min_battery': 100,
-                'data_points': 0
-            }
-        
-        trend = daily_trends[date_key]
-        trend['solar_energy'] += point.get('solar_power', 0)
-        trend['consumption'] += point.get('consumption', 0)
-        trend['peak_solar'] = max(trend['peak_solar'], point.get('solar_power', 0))
-        trend['min_battery'] = min(trend['min_battery'], point.get('battery_level', 100))
-        trend['data_points'] += 1
-    
-    # Calculate daily averages and efficiency
-    trends = []
-    total_generated = 0
-    total_consumed = 0
-    
-    for date_key, trend in daily_trends.items():
-        if trend['data_points'] > 0:
-            daily_avg_solar = trend['solar_energy'] / trend['data_points']
-            daily_avg_consumption = trend['consumption'] / trend['data_points']
-            efficiency = (daily_avg_solar / daily_avg_consumption * 100) if daily_avg_consumption > 0 else 0
-            
-            trends.append({
-                'date': date_key,
-                'avg_solar_power': round(daily_avg_solar, 2),
-                'avg_consumption': round(daily_avg_consumption, 2),
-                'peak_solar_power': round(trend['peak_solar'], 2),
-                'min_battery_level': round(trend['min_battery'], 1),
-                'efficiency_percentage': round(min(100, efficiency), 1),
-                'data_points': trend['data_points']
-            })
-            
-            total_generated += daily_avg_solar * 24  # Convert to daily kWh
-            total_consumed += daily_avg_consumption * 24
-    
-    # Find best and worst days
-    peak_solar_day = max(trends, key=lambda x: x['peak_solar_power'])['date'] if trends else None
-    lowest_battery_day = min(trends, key=lambda x: x['min_battery_level'])['date'] if trends else None
-    avg_efficiency = (total_generated / total_consumed * 100) if total_consumed > 0 else 0
-    
-    return {
-        "trends": sorted(trends, key=lambda x: x['date']),
-        "summary": {
-            "total_energy_generated": round(total_generated, 2),
-            "total_energy_consumed": round(total_consumed, 2),
-            "avg_efficiency": round(avg_efficiency, 1),
-            "peak_solar_day": peak_solar_day,
-            "lowest_battery_day": lowest_battery_day,
-            "analysis_period": f"{days} days",
-            "data_source": "influxdb" if historical_data else "none"
-        }
-    }
-
-@app.get("/api/analytics/optimization")
-async def get_optimization_recommendations(user: dict = Depends(verify_token)):
-    """Get intelligent battery optimization recommendations based on real data"""
-    logger.info("🎯 Generating optimization recommendations")
-    
-    # Get recent data for analysis
-    recent_data = influx_manager.query_historical_data(hours=48)  # Last 2 days
-    current_data = real_collector.get_current_data()
-    
-    recommendations = []
-    
-    # Analyze current battery level and solar generation
-    if current_data:
-        battery_level = current_data['metrics']['battery_level']
-        solar_power = current_data['metrics']['solar_power']
-        consumption = current_data['metrics']['consumption']
-        
-        # Battery optimization based on current state
-        if battery_level < 30:
-            recommendations.append({
-                "type": "charge_urgent",
-                "title": "Urgent Battery Charging",
-                "description": f"Battery at {battery_level}% - Enable grid charging immediately",
-                "impact": "Prevent system shutdown",
-                "priority": "critical",
-                "action": "Enable grid charging until 50%"
-            })
-        elif battery_level > 90 and solar_power > 2.0:
-            recommendations.append({
-                "type": "export_opportunity",
-                "title": "Export Excess Solar",
-                "description": f"Battery at {battery_level}% with {solar_power}kW solar - Export to grid",
-                "impact": "R50-80 additional income today",
-                "priority": "high",
-                "action": "Set battery discharge to grid export mode"
-            })
-        
-        # Load shifting recommendations
-        if solar_power > consumption + 1.0:  # Excess solar available
-            recommendations.append({
-                "type": "load_shifting",
-                "title": "Use Excess Solar Power",
-                "description": f"Excess {solar_power - consumption:.1f}kW available - Run heavy appliances now",
-                "impact": "R25-40 savings vs evening usage",
-                "priority": "medium",
-                "action": "Start dishwasher, washing machine, or pool pump"
-            })
-    
-    # Analyze historical patterns for scheduling recommendations
-    if recent_data:
-        # Find peak solar hours
-        solar_by_hour = {}
-        for point in recent_data:
-            hour = point['timestamp'].hour
-            if hour not in solar_by_hour:
-                solar_by_hour[hour] = []
-            solar_by_hour[hour].append(point.get('solar_power', 0))
-        
-        # Calculate average solar by hour
-        avg_solar_by_hour = {hour: sum(powers)/len(powers) for hour, powers in solar_by_hour.items() if powers}
-        
-        if avg_solar_by_hour:
-            peak_hour = max(avg_solar_by_hour.keys(), key=lambda h: avg_solar_by_hour[h])
-            peak_power = avg_solar_by_hour[peak_hour]
-            
-            if peak_power > 2.0:
-                recommendations.append({
-                    "type": "charge_schedule",
-                    "title": "Optimal Battery Charging Schedule",
-                    "description": f"Peak solar at {peak_hour}:00 ({peak_power:.1f}kW avg) - Schedule battery charging",
-                    "impact": "15-20% charging efficiency improvement",
-                    "priority": "high",
-                    "action": f"Set battery to charge mode between {peak_hour-1}:00-{peak_hour+2}:00"
-                })
-    
-    # Time-of-use optimization
-    current_hour = datetime.now().hour
-    if 17 <= current_hour <= 20:  # Peak tariff hours
-        recommendations.append({
-            "type": "peak_tariff",
-            "title": "Peak Tariff Period Active",
-            "description": "High electricity rates now - Use battery power instead of grid",
-            "impact": "R80-120 daily savings",
-            "priority": "high",
-            "action": "Set battery to supply loads, avoid grid import"
-        })
-    elif 22 <= current_hour or current_hour <= 6:  # Off-peak hours
-        if current_data and current_data['metrics']['battery_level'] < 70:
-            recommendations.append({
-                "type": "off_peak_charging",
-                "title": "Off-Peak Charging Opportunity",
-                "description": "Low electricity rates - Charge battery from grid if needed",
-                "impact": "R30-50 savings vs peak charging",
-                "priority": "medium",
-                "action": "Enable controlled grid charging to 80%"
-            })
-    
-    # Weather-based recommendations (if available)
-    if current_data:
-        weather = current_data['metrics'].get('weather_condition', '')
-        if weather in ['clouds', 'rain', 'overcast']:
-            recommendations.append({
-                "type": "weather_adjustment",
-                "title": "Low Solar Forecast",
-                "description": f"Weather: {weather} - Prepare for reduced solar generation",
-                "impact": "Maintain energy security",
-                "priority": "medium",
-                "action": "Ensure battery charged above 60% before evening"
-            })
-    
-    # Default recommendations if no specific conditions met
-    if not recommendations:
-        recommendations = [
-            {
-                "type": "general_optimization",
-                "title": "System Running Optimally",
-                "description": "No immediate optimization opportunities detected",
-                "impact": "Continue current operation",
-                "priority": "low",
-                "action": "Monitor system performance"
+            "correlation_analysis": {
+                "correlation_coefficient": correlation.correlation_coefficient,
+                "prediction_accuracy": correlation.prediction_accuracy,
+                "optimal_conditions": correlation.optimal_conditions,
+                "efficiency_factors": correlation.efficiency_factors
             },
-            {
-                "type": "efficiency_tip",
-                "title": "Daily Efficiency Check",
-                "description": "Review daily solar vs consumption patterns",
-                "impact": "5-10% efficiency improvement potential",
-                "priority": "low",
-                "action": "Check analytics dashboard for optimization opportunities"
-            }
-        ]
-    
-    return {
-        "recommendations": recommendations,
-        "analysis_based_on": {
-            "current_data": current_data is not None,
-            "historical_data_points": len(recent_data) if recent_data else 0,
-            "analysis_timestamp": datetime.now()
+            "weather_forecasts": len(weather_forecasts),
+            "production_forecast": production_forecast[:24],  # Next 24 hours
+            "analysis_timestamp": datetime.now(),
+            "confidence": "high" if correlation.correlation_coefficient > 0.7 else "medium"
         }
-    }
+        
+    except Exception as e:
+        logger.error(f"Weather correlation analysis error: {e}")
+        raise HTTPException(status_code=500, detail="Weather correlation analysis failed")
+
+@app.get("/api/v6/consumption/patterns")
+async def get_consumption_pattern_analysis(
+    days: int = 30,
+    user: dict = Depends(verify_token)
+):
+    """Machine learning consumption pattern recognition"""
+    if not PHASE6_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Phase 6 analytics not available")
+    
+    logger.info(f"🧠 Analyzing consumption patterns for {days} days")
+    
+    try:
+        # Get historical consumption data
+        historical_data = influx_manager.query_historical_data(days * 24)
+        
+        # Analyze patterns
+        patterns = consumption_analyzer.analyze_consumption_patterns(historical_data)
+        
+        # Detect anomalies
+        anomalies = consumption_analyzer.detect_anomalies(historical_data)
+        
+        # Generate solar data for optimization
+        solar_data = historical_data  # Contains solar_power field
+        
+        # Generate optimization recommendations
+        recommendations = consumption_analyzer.generate_optimization_recommendations(
+            patterns, solar_data, anomalies
+        )
+        
+        # Generate consumption predictions
+        consumption_predictions = consumption_analyzer.predict_consumption(historical_data, 24)
+        
+        return {
+            "patterns": [
+                {
+                    "type": p.pattern_type,
+                    "peak_hours": p.peak_hours,
+                    "average_consumption": p.average_consumption,
+                    "peak_consumption": p.peak_consumption,
+                    "efficiency_score": p.efficiency_score,
+                    "confidence": p.pattern_confidence
+                } for p in patterns
+            ],
+            "anomalies": [
+                {
+                    "timestamp": a.timestamp,
+                    "expected": a.expected_consumption,
+                    "actual": a.actual_consumption,
+                    "deviation": a.deviation_percentage,
+                    "type": a.anomaly_type,
+                    "severity": a.severity
+                } for a in anomalies[:5]  # Top 5 anomalies
+            ],
+            "optimization_recommendations": [
+                {
+                    "category": r.category,
+                    "title": r.title,
+                    "description": r.description,
+                    "potential_savings": r.potential_savings,
+                    "confidence": r.confidence,
+                    "priority": r.priority
+                } for r in recommendations
+            ],
+            "consumption_predictions": consumption_predictions,
+            "analysis_timestamp": datetime.now(),
+            "data_quality": "high" if len(historical_data) > days * 20 else "medium"
+        }
+        
+    except Exception as e:
+        logger.error(f"Consumption pattern analysis error: {e}")
+        raise HTTPException(status_code=500, detail="Consumption pattern analysis failed")
+
+@app.get("/api/v6/battery/optimization")
+async def get_battery_optimization(
+    hours: int = 24,
+    user: dict = Depends(verify_token)
+):
+    """Advanced battery optimization and scheduling"""
+    if not PHASE6_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Phase 6 analytics not available")
+    
+    logger.info(f"🔋 Generating battery optimization for {hours} hours")
+    
+    try:
+        # Get current battery SOC
+        current_data = real_collector.get_current_data()
+        current_soc = current_data['metrics']['battery_level'] if current_data else 50.0
+        
+        # Get historical battery data for health analysis
+        historical_data = influx_manager.query_historical_data(30 * 24)  # 30 days
+        
+        # Analyze battery health
+        health_metrics = battery_optimizer.analyze_battery_health(historical_data)
+        
+        # Generate forecasts for optimization
+        solar_forecast = []
+        consumption_forecast = []
+        
+        # Simple forecast for demo (would use weather_analyzer in production)
+        for i in range(hours):
+            future_time = datetime.now() + timedelta(hours=i)
+            hour = future_time.hour
+            
+            if 6 <= hour <= 18:
+                solar_power = 4.0 * np.sin(np.pi * (hour - 6) / 12)
+            else:
+                solar_power = 0.0
+                
+            consumption = 1.5 if 6 <= hour <= 22 else 0.8
+            
+            solar_forecast.append({
+                'timestamp': future_time,
+                'predicted_solar_power': max(0, solar_power)
+            })
+            
+            consumption_forecast.append({
+                'timestamp': future_time,
+                'predicted_consumption': consumption
+            })
+        
+        # Generate battery schedule
+        battery_schedule = battery_optimizer.optimize_battery_schedule(
+            solar_forecast, consumption_forecast, current_soc, hours
+        )
+        
+        # Generate energy flow optimization
+        energy_flow = battery_optimizer.generate_energy_flow_optimization(
+            solar_forecast, consumption_forecast, current_soc
+        )
+        
+        return {
+            "battery_health": {
+                "capacity_retention": health_metrics.capacity_retention,
+                "cycle_count": health_metrics.cycle_count_estimate,
+                "efficiency": health_metrics.efficiency,
+                "health_score": health_metrics.health_score,
+                "degradation_rate": health_metrics.degradation_rate
+            },
+            "optimization_schedule": [
+                {
+                    "timestamp": s.timestamp,
+                    "mode": s.mode.value,
+                    "target_soc": s.target_soc,
+                    "priority": s.priority,
+                    "reason": s.reason,
+                    "expected_savings": s.expected_savings,
+                    "confidence": s.confidence
+                } for s in battery_schedule
+            ],
+            "energy_flow_optimization": [
+                {
+                    "timestamp": e.timestamp,
+                    "solar_forecast": e.solar_forecast,
+                    "consumption_forecast": e.consumption_forecast,
+                    "grid_cost": e.grid_cost,
+                    "recommended_action": e.recommended_battery_action,
+                    "potential_savings": e.potential_savings,
+                    "strategy": e.optimization_strategy
+                } for e in energy_flow[:12]  # Next 12 hours
+            ],
+            "current_soc": current_soc,
+            "analysis_timestamp": datetime.now(),
+            "optimization_confidence": "high"
+        }
+        
+    except Exception as e:
+        logger.error(f"Battery optimization error: {e}")
+        raise HTTPException(status_code=500, detail="Battery optimization failed")
+
+@app.get("/api/v6/system/insights")
+async def get_system_insights(
+    user: dict = Depends(verify_token)
+):
+    """Comprehensive system insights and recommendations"""
+    if not PHASE6_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Phase 6 analytics not available")
+    
+    logger.info("🔍 Generating comprehensive system insights")
+    
+    try:
+        # Get recent data
+        historical_data = influx_manager.query_historical_data(7 * 24)  # 7 days
+        current_data = real_collector.get_current_data()
+        
+        if not historical_data:
+            raise HTTPException(status_code=404, detail="Insufficient data for insights")
+        
+        # Calculate key performance indicators
+        df = pd.DataFrame(historical_data)
+        
+        total_solar = df['solar_power'].sum() if 'solar_power' in df.columns else 0
+        total_consumption = df['consumption'].sum() if 'consumption' in df.columns else 0
+        avg_battery_level = df['battery_level'].mean() if 'battery_level' in df.columns else 0
+        
+        energy_independence = (total_solar / total_consumption * 100) if total_consumption > 0 else 0
+        
+        # System efficiency score
+        efficiency_factors = {
+            "solar_utilization": min(100, total_solar / (5.0 * 8 * 7) * 100),  # 5kW system, 8 peak hours
+            "battery_cycling": min(100, avg_battery_level),
+            "energy_independence": min(100, energy_independence)
+        }
+        
+        overall_efficiency = sum(efficiency_factors.values()) / len(efficiency_factors)
+        
+        # Environmental impact
+        co2_saved = total_solar * 0.85  # kg CO2 per kWh saved
+        trees_equivalent = co2_saved / 22  # 22kg CO2 per tree per year
+        
+        insights = {
+            "performance_summary": {
+                "energy_independence": round(energy_independence, 1),
+                "system_efficiency": round(overall_efficiency, 1),
+                "weekly_solar_production": round(total_solar, 2),
+                "weekly_consumption": round(total_consumption, 2),
+                "average_battery_level": round(avg_battery_level, 1)
+            },
+            "efficiency_breakdown": efficiency_factors,
+            "environmental_impact": {
+                "co2_saved_kg": round(co2_saved, 2),
+                "trees_equivalent": round(trees_equivalent, 2),
+                "grid_energy_offset": round(total_solar, 2)
+            },
+            "system_status": current_data['status'] if current_data else {},
+            "recommendations": [
+                {
+                    "category": "efficiency",
+                    "title": "System Performance",
+                    "description": f"Your system is operating at {overall_efficiency:.1f}% efficiency",
+                    "priority": "high" if overall_efficiency < 70 else "medium"
+                }
+            ],
+            "analysis_timestamp": datetime.now(),
+            "data_period": "7_days"
+        }
+        
+        return insights
+        
+    except Exception as e:
+        logger.error(f"System insights error: {e}")
+        raise HTTPException(status_code=500, detail="System insights generation failed")
 
 # WebSocket endpoint
 @app.websocket("/ws/dashboard")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time dashboard updates"""
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive and handle incoming messages
             try:
                 data = await websocket.receive_text()
                 message = json.loads(data)
@@ -1267,9 +1172,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
+    logger.info("🚀 Starting Sunsynk Dashboard Phase 6 Backend")
+    logger.info("✨ Features: ML Analytics, Weather Correlation, Battery Optimization")
+    
     uvicorn.run(
         "main:app",
         host=os.getenv("API_HOST", "0.0.0.0"),
-        port=int(os.getenv("API_PORT", 8000)),
-        reload=True
+        port=int(os.getenv("API_PORT", 8001)),  # Changed from 8000 to avoid conflicts
+        reload=True,
+        log_level="info"
     )

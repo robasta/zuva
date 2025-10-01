@@ -4,33 +4,6 @@ FastAPI backend with InfluxDB integration and advanced ML analytics
 Real-time monitoring with machine learning predictions and optimization
 """
 
-import os
-import sys
-import asyncio
-import json
-import logging
-from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
-from contextlib import asynccontextmanager
-from pathlib import Path
-import aiohttp
-import pandas as pd
-import numpy as np
-from influxdb_client import InfluxDBClient, Point, WritePrecision
-from influxdb_client.client.write_api import SYNCHRONOUS
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
-import jwt
-
-# Add the sunsynk package to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-# Import Sunsynk client
-from sunsynk.client import SunsynkClient
-
 import logging
 import sys
 import os
@@ -57,15 +30,24 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
 # Core imports
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from contextlib import asynccontextmanager
+from influxdb_client import InfluxDBClient, Point, WritePrecision
+from influxdb_client.client.write_api import SYNCHRONOUS
+from pathlib import Path
+import aiohttp
 import jwt
-from dotenv import load_dotenv
 import uvicorn
 import json
 import traceback
+
+# Add sunsynk package to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from sunsynk.client import SunsynkClient
 
 # Phase 6 Analytics Modules - Import with error handling
 PHASE6_AVAILABLE = False
