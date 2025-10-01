@@ -1,8 +1,6 @@
 global:
   smtp_smarthost: 'smtp.gmail.com:587'
-  smtp_from: '${EMAIL_FROM}'
-  smtp_auth_username: '${EMAIL_USERNAME}'
-  smtp_auth_password: '${EMAIL_PASSWORD}'
+  smtp_from: 'noreply@sunsynk.dashboard'
 
 route:
   group_by: ['alertname']
@@ -26,32 +24,16 @@ receivers:
 
   - name: 'critical-alerts'
     email_configs:
-      - to: '${EMAIL_TO}'
-        subject: '[CRITICAL] Sunsynk Alert: {{ .GroupLabels.alertname }}'
-        body: |
-          {{ range .Alerts }}
-          Alert: {{ .Annotations.summary }}
-          Description: {{ .Annotations.description }}
-          Severity: {{ .Labels.severity }}
-          Instance: {{ .Labels.instance }}
-          Time: {{ .StartsAt }}
-          {{ end }}
+      - to: 'admin@sunsynk.dashboard'
+        subject: '[CRITICAL] Sunsynk Alert'
     webhook_configs:
       - url: 'http://dashboard-api:8000/api/alerts/webhook'
         send_resolved: true
 
   - name: 'warning-alerts'
     email_configs:
-      - to: '${EMAIL_TO}'
-        subject: '[WARNING] Sunsynk Alert: {{ .GroupLabels.alertname }}'
-        body: |
-          {{ range .Alerts }}
-          Alert: {{ .Annotations.summary }}
-          Description: {{ .Annotations.description }}
-          Severity: {{ .Labels.severity }}
-          Instance: {{ .Labels.instance }}
-          Time: {{ .StartsAt }}
-          {{ end }}
+      - to: 'admin@sunsynk.dashboard'
+        subject: '[WARNING] Sunsynk Alert'
 
 inhibit_rules:
   - source_match:

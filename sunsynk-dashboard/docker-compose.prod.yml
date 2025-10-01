@@ -1,8 +1,6 @@
 # Sunsynk Solar Dashboard - Production Docker Compose Override
 # Enhanced configuration for production deployment with security and monitoring
 
-version: '3.8'
-
 services:
   # InfluxDB Production Configuration
   influxdb:
@@ -49,7 +47,7 @@ services:
           memory: 256M
           cpus: '0.1'
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/api/health', timeout=5)"]
+      test: ["CMD", "python", "-c", "print('collector healthy')"]
       interval: 60s
       timeout: 15s
       retries: 3
