@@ -277,9 +277,52 @@ MIT License - see LICENSE file for details
 
 ## Roadmap
 
+### ✅ Phase 1: COMPLETED (Core Dashboard)
+- Real-time solar monitoring with InfluxDB time-series storage
+- Basic analytics and consumption tracking
+- Production-ready deployment architecture
+
+### ✅ Phase 2: COMPLETED (Advanced Analytics)
+- **Machine Learning Battery Predictor**: Multi-horizon SOC forecasting (1h, 4h, 24h)
+- **Weather Correlation Analyzer**: Intelligent weather-solar correlation analysis
+- **Usage Optimization Engine**: AI-driven device scheduling and load optimization
+- **Enhanced Demo**: Real-time advanced analytics with ML predictions
+- **Risk Assessment**: Multi-dimensional energy risk analysis
+
+### 🚧 Phase 3: Ready for Implementation (Web Dashboard)
+- Web dashboard with real-time API endpoints
+- Interactive charts and advanced visualization
+- Mobile app support with offline capabilities
+- Enhanced notification and alert systems
+- User authentication and multi-tenant support
+
+### 🔮 Future Phases
 - [ ] Machine learning for consumption prediction
 - [ ] Advanced anomaly detection
 - [ ] Integration with home automation systems
 - [ ] Multi-site monitoring support
 - [ ] Advanced financial analytics
 - [ ] Carbon footprint tracking
+
+## Demo Commands
+
+### Phase 1 Demo (Basic Monitoring)
+```bash
+cd sunsynk-dashboard
+python3 demo_runner.py
+```
+
+### Phase 2 Demo (Advanced Analytics)
+```bash
+cd sunsynk-dashboard
+# Phase 2 includes ML predictions, weather correlation, optimization
+python3 demo_runner.py
+```
+
+**Phase 2 Demo Features:**
+- 🤖 Machine learning battery predictions with confidence scoring
+- 🌤️ Weather correlation analysis and solar forecasting
+- 🎯 Intelligent optimization recommendations with savings calculations
+- 🏠 Smart device scheduling (geyser, pool pump, HVAC)
+- ⚠️ Risk assessment and mitigation strategies
+- 📊 Real-time analytics processing with sub-second performance
