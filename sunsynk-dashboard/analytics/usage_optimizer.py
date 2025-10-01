@@ -39,6 +39,19 @@ class OptimizationRecommendation:
 
 
 @dataclass
+class DeviceSchedule:
+    """Alias for LoadSchedule for backward compatibility."""
+    timestamp: datetime
+    device_type: str
+    optimal_start_time: datetime
+    duration_hours: float
+    power_rating: float
+    reason: str
+    savings_potential: float
+    confidence: float
+
+
+@dataclass
 class LoadSchedule:
     """Optimal load scheduling recommendation."""
     timestamp: datetime
@@ -49,6 +62,19 @@ class LoadSchedule:
     reason: str
     savings_potential: float
     confidence: float
+
+
+@dataclass
+class OptimizationPlan:
+    """Alias for EnergyOptimizationPlan for backward compatibility."""
+    timestamp: datetime
+    daily_recommendations: List[OptimizationRecommendation]
+    load_schedules: List[LoadSchedule]
+    battery_strategy: Dict[str, Any]
+    solar_utilization_score: float
+    potential_daily_savings: float
+    plan_confidence: float
+    risk_assessment: Dict[str, float]
 
 
 @dataclass
