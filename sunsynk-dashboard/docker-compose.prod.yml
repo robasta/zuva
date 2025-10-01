@@ -12,7 +12,7 @@ services:
     volumes:
       - influxdb_data:/var/lib/influxdb2:rw
       - influxdb_config:/etc/influxdb2:rw
-      - ./backups:/backups:rw
+      - backup_data:/backups:rw
     restart: always
     deploy:
       resources:
@@ -231,12 +231,8 @@ services:
       - RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
       - ENVIRONMENT=production
     volumes:
-      - ./backups:/app/backups:rw
+      - backup_data:/app/backups:rw
       - influxdb_data:/data/influxdb:ro
-      - ./logs:/app/logs:ro
-      - ./config:/app/config:ro
-      - ./monitoring:/app/monitoring:ro
-      - ./.env:/app/.env:ro
     deploy:
       resources:
         limits:
@@ -301,34 +297,16 @@ services:
 volumes:
   influxdb_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${DATA_DIR:-./data}/influxdb
   influxdb_config:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${DATA_DIR:-./data}/influxdb-config
   grafana_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${DATA_DIR:-./data}/grafana
   prometheus_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${DATA_DIR:-./data}/prometheus
   alertmanager_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${DATA_DIR:-./data}/alertmanager
+  backup_data:
+    driver: local
 
 # Production Network Configuration
 networks:
