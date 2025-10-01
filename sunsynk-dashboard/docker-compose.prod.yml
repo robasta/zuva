@@ -114,6 +114,8 @@ services:
 
   # Nginx Production Configuration
   nginx:
+    image: nginx:alpine
+    container_name: sunsynk-nginx
     restart: always
     ports:
       - "80:80"
@@ -225,7 +227,10 @@ services:
 
   # Backup Service Production Configuration
   backup:
+    image: alpine:latest
+    container_name: sunsynk-backup
     restart: always
+    command: sh -c "while true; do echo 'Backup service running...'; sleep 3600; done"
     environment:
       - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-0 2 * * *}
       - RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
@@ -251,6 +256,8 @@ services:
 
   # Watchtower for Automatic Updates (Optional)
   watchtower:
+    image: containrrr/watchtower:latest
+    container_name: sunsynk-watchtower
     restart: always
     environment:
       - WATCHTOWER_CLEANUP=true
@@ -275,23 +282,16 @@ services:
     profiles:
       - production
 
-  # Log Rotation Service
-  logrotate:
-    image: linkyard/docker-logrotate:latest
-    restart: always
-    environment:
-      - CRON_SCHEDULE=0 1 * * *  # Daily at 1 AM
-      - LOGROTATE_CONF=/logrotate.conf
-    volumes:
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - ./monitoring/logrotate.conf:/logrotate.conf:ro
-    deploy:
-      resources:
-        limits:
-          memory: 32M
-          cpus: '0.02'
-    profiles:
-      - production
+  # Log Rotation Service - Disabled (using Docker's built-in log rotation)
+  # logrotate:
+  #   image: blacklabelops/logrotate:latest
+  #   restart: always
+  #   environment:
+  #     - CRON_SCHEDULE=0 1 * * *
+  #   volumes:
+  #     - /var/lib/docker/containers:/var/lib/docker/containers:ro
+  #   profiles:
+  #     - production
 
 # Production Volume Configuration
 volumes:
