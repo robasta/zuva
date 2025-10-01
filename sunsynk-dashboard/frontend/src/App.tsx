@@ -24,6 +24,12 @@ import {
   CheckCircle,
   Error as ErrorIcon
 } from '@mui/icons-material';
+import { formatPower, formatPowerWithSign } from './utils/powerUtils';
+import Analytics from './pages/Analytics/Analytics';
+import NotificationCenter from './components/Notifications/NotificationCenter';
+import ToastNotification from './components/Notifications/ToastNotification';
+
+const REFRESH_INTERVAL = 30000; // 30 seconds
 import './App.css';
 
 interface DashboardMetrics {
@@ -54,6 +60,23 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<string>('');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'analytics'>('dashboard');
+  
+  // Notification state
+  const [toastNotification, setToastNotification] = useState<{
+    open: boolean;
+    severity: 'success' | 'info' | 'warning' | 'error';
+    title: string;
+    message: string;
+  }>({
+    open: false,
+    severity: 'info',
+    title: '',
+    message: ''
+  });
+
+  // WebSocket for real-time notifications
+  const [ws, setWs] = useState<WebSocket | null>(null);
 
   const fetchDashboardData = async () => {
     try {
@@ -103,10 +126,82 @@ const App: React.FC = () => {
   useEffect(() => {
     fetchDashboardData();
     
-    // Set up auto-refresh every 30 seconds
-    const interval = setInterval(fetchDashboardData, 30000);
+    // Set up periodic refresh
+    const interval = setInterval(fetchDashboardData, REFRESH_INTERVAL);
     
-    return () => clearInterval(interval);
+    // Set up WebSocket connection for real-time notifications
+    const connectWebSocket = () => {
+      try {
+        const websocket = new WebSocket('ws://localhost:8001/ws/dashboard');
+        
+        websocket.onopen = () => {
+          console.log('🔌 WebSocket connected for notifications');
+          setWs(websocket);
+        };
+        
+        websocket.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            
+            if (message.type === 'alert_notification') {
+              const alertData = message.data;
+              
+              // Show toast notification for new alerts
+              const severityMap: Record<string, 'success' | 'info' | 'warning' | 'error'> = {
+                'low': 'info',
+                'medium': 'warning', 
+                'high': 'warning',
+                'critical': 'error'
+              };
+              
+              setToastNotification({
+                open: true,
+                severity: severityMap[alertData.severity] || 'info',
+                title: alertData.title,
+                message: alertData.message
+              });
+              
+              // Play sound for critical alerts
+              if (alertData.severity === 'critical') {
+                try {
+                  const audio = new Audio('/notification-sound.mp3');
+                  audio.play().catch(e => console.log('Could not play notification sound:', e));
+                } catch (e) {
+                  console.log('Audio not available:', e);
+                }
+              }
+            } else if (message.type === 'dashboard_update') {
+              // Handle dashboard updates if needed
+              console.log('📊 Dashboard update received via WebSocket');
+            }
+          } catch (e) {
+            console.error('Failed to parse WebSocket message:', e);
+          }
+        };
+        
+        websocket.onclose = () => {
+          console.log('🔌 WebSocket disconnected, attempting to reconnect...');
+          setTimeout(connectWebSocket, 5000); // Reconnect after 5 seconds
+        };
+        
+        websocket.onerror = (error) => {
+          console.error('❌ WebSocket error:', error);
+        };
+        
+      } catch (error) {
+        console.error('Failed to connect WebSocket:', error);
+        setTimeout(connectWebSocket, 5000);
+      }
+    };
+    
+    connectWebSocket();
+    
+    return () => {
+      clearInterval(interval);
+      if (ws) {
+        ws.close();
+      }
+    };
   }, []);
 
   const getGridStatusColor = (gridPower: number) => {
@@ -116,8 +211,8 @@ const App: React.FC = () => {
   };
 
   const getGridStatusText = (gridPower: number) => {
-    if (gridPower > 0.1) return `Importing ${gridPower.toFixed(2)}kW`;
-    if (gridPower < -0.1) return `Exporting ${Math.abs(gridPower).toFixed(2)}kW`;
+    if (gridPower > 0.1) return `Importing ${formatPowerWithSign(gridPower)}`;
+    if (gridPower < -0.1) return `Exporting ${formatPowerWithSign(Math.abs(gridPower))}`;
     return 'Grid Independent';
   };
 
@@ -171,8 +266,34 @@ const App: React.FC = () => {
         <Toolbar>
           <WbSunny sx={{ mr: 2 }} />
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            Sunsynk Solar Dashboard - Phase 3
+            Sunsynk Solar Dashboard - Phase 6 ML
           </Typography>
+          
+          {/* Navigation Buttons */}
+          <Button 
+            color="inherit" 
+            onClick={() => setCurrentView('dashboard')}
+            sx={{ 
+              mr: 1, 
+              backgroundColor: currentView === 'dashboard' ? 'rgba(255,255,255,0.2)' : 'transparent',
+              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            }}
+          >
+            Dashboard
+          </Button>
+          <Button 
+            color="inherit" 
+            onClick={() => setCurrentView('analytics')}
+            sx={{ 
+              mr: 2, 
+              backgroundColor: currentView === 'analytics' ? 'rgba(255,255,255,0.2)' : 'transparent',
+              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            }}
+          >
+            📊 ML Analytics
+          </Button>
+
+          <NotificationCenter />
           <Chip 
             icon={status.online ? <CheckCircle /> : <ErrorIcon />}
             label={status.online ? 'Online' : 'Offline'}
@@ -185,7 +306,9 @@ const App: React.FC = () => {
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
+      {/* Conditional Content Rendering */}
+      {currentView === 'dashboard' ? (
+        <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
         <Grid container spacing={3}>
           {/* System Overview */}
           <Grid item xs={12}>
@@ -208,10 +331,7 @@ const App: React.FC = () => {
                   <Typography variant="h6">Solar Generation</Typography>
                 </Box>
                 <Typography variant="h3" component="div" color="primary">
-                  {metrics.solar_power.toFixed(2)}
-                  <Typography variant="h6" component="span" sx={{ ml: 1 }}>
-                    kW
-                  </Typography>
+                  {formatPower(metrics.solar_power)}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   {metrics.temperature}°C | {metrics.weather_condition}
@@ -252,10 +372,7 @@ const App: React.FC = () => {
                   <Typography variant="h6">Grid Power</Typography>
                 </Box>
                 <Typography variant="h3" component="div" color="primary">
-                  {Math.abs(metrics.grid_power).toFixed(2)}
-                  <Typography variant="h6" component="span" sx={{ ml: 1 }}>
-                    kW
-                  </Typography>
+                  {formatPower(Math.abs(metrics.grid_power))}
                 </Typography>
                 <Chip 
                   label={getGridStatusText(metrics.grid_power)}
@@ -275,10 +392,7 @@ const App: React.FC = () => {
                   <Typography variant="h6">Consumption</Typography>
                 </Box>
                 <Typography variant="h3" component="div" color="primary">
-                  {metrics.consumption.toFixed(2)}
-                  <Typography variant="h6" component="span" sx={{ ml: 1 }}>
-                    kW
-                  </Typography>
+                  {formatPower(metrics.consumption)}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   House Load
@@ -377,6 +491,18 @@ const App: React.FC = () => {
           </Grid>
         </Grid>
       </Container>
+      ) : (
+        <Analytics />
+      )}
+      
+      {/* Toast Notifications */}
+      <ToastNotification
+        open={toastNotification.open}
+        severity={toastNotification.severity}
+        title={toastNotification.title}
+        message={toastNotification.message}
+        onClose={() => setToastNotification(prev => ({ ...prev, open: false }))}
+      />
     </div>
   );
 };

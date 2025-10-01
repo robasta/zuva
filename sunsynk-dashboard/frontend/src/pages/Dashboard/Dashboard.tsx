@@ -22,6 +22,7 @@ import {
 } from '@mui/icons-material';
 import { useData } from '../../contexts/DataContext';
 import { useWebSocket } from '../../contexts/WebSocketContext';
+import { formatPower } from '../../utils/powerUtils';
 
 const Dashboard: React.FC = () => {
   const { systemStatus, mlPredictions, weatherData, optimizationPlan, isLoading, error, refreshData } = useData();
@@ -32,10 +33,7 @@ const Dashboard: React.FC = () => {
     refreshData();
   }, []);
 
-  const formatPower = (value: number): string => {
-    if (!value && value !== 0) return '0.0 kW';
-    return Math.abs(value).toFixed(2) + ' kW';
-  };
+  // Remove the old formatPower function as we're using the utility now
 
   const formatPercentage = (value: number): string => {
     if (!value && value !== 0) return '0%';

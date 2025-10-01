@@ -109,6 +109,39 @@ class ApiService {
     }
   }
 
+  // Generic HTTP methods
+  async get<T>(endpoint: string, params?: any): Promise<T> {
+    const response = await this.request<T>('GET', endpoint, params);
+    if (!response.success) {
+      throw new Error(response.error || 'API request failed');
+    }
+    return response.data as T;
+  }
+
+  async post<T>(endpoint: string, data?: any): Promise<T> {
+    const response = await this.request<T>('POST', endpoint, data);
+    if (!response.success) {
+      throw new Error(response.error || 'API request failed');
+    }
+    return response.data as T;
+  }
+
+  async put<T>(endpoint: string, data?: any): Promise<T> {
+    const response = await this.request<T>('PUT', endpoint, data);
+    if (!response.success) {
+      throw new Error(response.error || 'API request failed');
+    }
+    return response.data as T;
+  }
+
+  async delete<T>(endpoint: string): Promise<T> {
+    const response = await this.request<T>('DELETE', endpoint);
+    if (!response.success) {
+      throw new Error(response.error || 'API request failed');
+    }
+    return response.data as T;
+  }
+
   // Health check
   async healthCheck(): Promise<ApiResponse> {
     return this.request('GET', '/health');
@@ -154,12 +187,37 @@ class ApiService {
   }
 
   // Alerts and notifications
-  async getAlerts(): Promise<ApiResponse> {
-    return this.request('GET', '/alerts');
+  async getAlerts(status?: string, severity?: string, hours: number = 24): Promise<ApiResponse> {
+    const params = new URLSearchParams();
+    if (status) params.append('status', status);
+    if (severity) params.append('severity', severity);
+    params.append('hours', hours.toString());
+    
+    return this.request('GET', `/alerts?${params.toString()}`);
   }
 
   async acknowledgeAlert(alertId: string): Promise<ApiResponse> {
     return this.request('POST', `/alerts/${alertId}/acknowledge`);
+  }
+
+  async resolveAlert(alertId: string): Promise<ApiResponse> {
+    return this.request('POST', `/alerts/${alertId}/resolve`);
+  }
+
+  async getNotificationPreferences(): Promise<ApiResponse> {
+    return this.request('GET', '/notifications/preferences');
+  }
+
+  async updateNotificationPreferences(preferences: any): Promise<ApiResponse> {
+    return this.request('PUT', '/notifications/preferences', preferences);
+  }
+
+  async createTestAlert(severity: string = 'low'): Promise<ApiResponse> {
+    return this.request('POST', `/alerts/test?severity=${severity}`);
+  }
+
+  async getSystemMonitoringStatus(): Promise<ApiResponse> {
+    return this.request('GET', '/system/monitor');
   }
 
   // Export data
