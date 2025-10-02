@@ -22,7 +22,10 @@ import {
   Home,
   Refresh,
   CheckCircle,
-  Error as ErrorIcon
+  Error as ErrorIcon,
+  TrendingUp,
+  TrendingDown,
+  Balance
 } from '@mui/icons-material';
 import { formatPower, formatPowerWithSign } from './utils/powerUtils';
 import Analytics from './pages/Analytics/Analytics';
@@ -236,6 +239,38 @@ const App: React.FC = () => {
     return <Battery80 sx={{ color: '#f44336' }} />;
   };
 
+  const getEnergyBalance = (solarPower: number, consumption: number) => {
+    return solarPower - consumption;
+  };
+
+  const getEnergyBalanceColor = (balance: number) => {
+    if (balance > 1.0) return 'success'; // Good surplus
+    if (balance > 0.5) return 'success'; // Moderate surplus
+    if (balance > -0.5) return 'warning'; // Small deficit/surplus
+    if (balance > -1.5) return 'warning'; // Moderate deficit
+    return 'error'; // Large deficit
+  };
+
+  const getEnergyBalanceIcon = (balance: number) => {
+    if (balance > 0.5) return <TrendingUp sx={{ color: '#4caf50' }} />;
+    if (balance > -0.5) return <Balance sx={{ color: '#ff9800' }} />;
+    return <TrendingDown sx={{ color: '#f44336' }} />;
+  };
+
+  const getEnergyBalanceText = (balance: number) => {
+    if (balance > 0.5) return `Surplus: ${formatPower(balance)}`;
+    if (balance > -0.5) return 'Balanced';
+    return `Deficit: ${formatPower(Math.abs(balance))}`;
+  };
+
+  const getEnergyBalanceDescription = (balance: number) => {
+    if (balance > 1.5) return 'Excellent surplus - selling to grid';
+    if (balance > 0.5) return 'Good surplus - charging battery';
+    if (balance > -0.5) return 'Well balanced system';
+    if (balance > -1.5) return 'Moderate deficit - using battery';
+    return 'Large deficit - importing from grid';
+  };
+
   if (loading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
@@ -409,6 +444,32 @@ const App: React.FC = () => {
                 <Chip 
                   label={getGridStatusText(metrics.grid_power)}
                   color={getGridStatusColor(metrics.grid_power)}
+                  size="small"
+                />
+              </CardContent>
+            </Card>
+          </Grid>
+
+          {/* Energy Balance */}
+          <Grid item xs={12} md={6} lg={3}>
+            <Card sx={{ height: '100%' }}>
+              <CardContent>
+                <Box display="flex" alignItems="center" mb={2}>
+                  {getEnergyBalanceIcon(getEnergyBalance(metrics.solar_power, metrics.consumption))}
+                  <Typography variant="h6" sx={{ ml: 1 }}>Energy Balance</Typography>
+                </Box>
+                <Typography variant="h3" component="div" color="primary">
+                  {getEnergyBalanceText(getEnergyBalance(metrics.solar_power, metrics.consumption)).split(':')[0]}
+                </Typography>
+                <Typography variant="h6" component="div" color="primary" sx={{ mt: 1 }}>
+                  {getEnergyBalanceText(getEnergyBalance(metrics.solar_power, metrics.consumption)).includes(':') 
+                    ? getEnergyBalanceText(getEnergyBalance(metrics.solar_power, metrics.consumption)).split(':')[1]?.trim()
+                    : ''
+                  }
+                </Typography>
+                <Chip 
+                  label={getEnergyBalanceDescription(getEnergyBalance(metrics.solar_power, metrics.consumption))}
+                  color={getEnergyBalanceColor(getEnergyBalance(metrics.solar_power, metrics.consumption))}
                   size="small"
                 />
               </CardContent>
