@@ -1186,57 +1186,66 @@ export const Settings: React.FC = () => {
               </Box>
             )}
 
-            {/* Test Alerts Card */}
-            <Grid container spacing={3} sx={{ mt: 2 }}>
-              <Grid item xs={12} md={6}>
-                <Card>
-                  <CardHeader title="Test Alerts" avatar={<SecurityIcon color="primary" />} />
-                  <CardContent>
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                      Create test alerts to verify your notification configuration.
-                    </Typography>
-                    <Stack spacing={2}>
-                      <Button
-                        variant="outlined"
-                        color="success"
-                        startIcon={<InfoIcon />}
-                        onClick={() => createTestAlert('low')}
-                        fullWidth
-                      >
-                        Test Low Priority Alert
-                      </Button>
-                      <Button
-                        variant="outlined"
-                        color="info"
-                        startIcon={<InfoIcon />}
-                        onClick={() => createTestAlert('medium')}
-                        fullWidth
-                      >
-                        Test Medium Priority Alert
-                      </Button>
-                      <Button
-                        variant="outlined"
-                        color="warning"
-                        startIcon={<InfoIcon />}
-                        onClick={() => createTestAlert('high')}
-                        fullWidth
-                      >
-                        Test High Priority Alert
-                      </Button>
-                      <Button
-                        variant="outlined"
-                        color="error"
-                        startIcon={<InfoIcon />}
-                        onClick={() => createTestAlert('critical')}
-                        fullWidth
-                      >
-                        Test Critical Alert
-                      </Button>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              </Grid>
-            </Grid>
+            {/* Test Alerts */}
+            <Accordion expanded={expandedPanel === 'test'} onChange={handlePanelChange('test')} sx={{ mt: 2 }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Box display="flex" alignItems="center">
+                  <SecurityIcon sx={{ mr: 1 }} />
+                  <Typography variant="h6">Test Alerts</Typography>
+                </Box>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                  Create test alerts to verify your notification configuration.
+                </Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={6}>
+                    <Button
+                      variant="outlined"
+                      color="success"
+                      startIcon={<InfoIcon />}
+                      onClick={() => createTestAlert('low')}
+                      fullWidth
+                    >
+                      Test Low Priority Alert
+                    </Button>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Button
+                      variant="outlined"
+                      color="info"
+                      startIcon={<InfoIcon />}
+                      onClick={() => createTestAlert('medium')}
+                      fullWidth
+                    >
+                      Test Medium Priority Alert
+                    </Button>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Button
+                      variant="outlined"
+                      color="warning"
+                      startIcon={<InfoIcon />}
+                      onClick={() => createTestAlert('high')}
+                      fullWidth
+                    >
+                      Test High Priority Alert
+                    </Button>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Button
+                      variant="outlined"
+                      color="error"
+                      startIcon={<InfoIcon />}
+                      onClick={() => createTestAlert('critical')}
+                      fullWidth
+                    >
+                      Test Critical Alert
+                    </Button>
+                  </Grid>
+                </Grid>
+              </AccordionDetails>
+            </Accordion>
 
             <Box sx={{ mt: 3 }}>
               {selectedAlertConfig ? (
