@@ -280,7 +280,7 @@ const App: React.FC = () => {
         <Toolbar>
           <WbSunny sx={{ mr: 2 }} />
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            Sunsynk Solar Dashboard - Phase 6 ML
+            Sunsynk Solar Dashboard
           </Typography>
           
           {/* Navigation Buttons */}
@@ -354,6 +354,24 @@ const App: React.FC = () => {
             </Card>
           </Grid>
 
+          {/* House Consumption */}
+          <Grid item xs={12} md={6} lg={3}>
+            <Card sx={{ height: '100%' }}>
+              <CardContent>
+                <Box display="flex" alignItems="center" mb={2}>
+                  <Home sx={{ color: '#9c27b0', mr: 1 }} />
+                  <Typography variant="h6">Consumption</Typography>
+                </Box>
+                <Typography variant="h3" component="div" color="primary">
+                  {formatPower(metrics.consumption)}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  House Load
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+
           {/* Battery Status */}
           <Grid item xs={12} md={6} lg={3}>
             <Card sx={{ height: '100%' }}>
@@ -393,24 +411,6 @@ const App: React.FC = () => {
                   color={getGridStatusColor(metrics.grid_power)}
                   size="small"
                 />
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* House Consumption */}
-          <Grid item xs={12} md={6} lg={3}>
-            <Card sx={{ height: '100%' }}>
-              <CardContent>
-                <Box display="flex" alignItems="center" mb={2}>
-                  <Home sx={{ color: '#9c27b0', mr: 1 }} />
-                  <Typography variant="h6">Consumption</Typography>
-                </Box>
-                <Typography variant="h3" component="div" color="primary">
-                  {formatPower(metrics.consumption)}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  House Load
-                </Typography>
               </CardContent>
             </Card>
           </Grid>
@@ -496,13 +496,6 @@ const App: React.FC = () => {
             </Card>
           </Grid>
 
-          {/* Real Data Notice */}
-          <Grid item xs={12}>
-            <Alert severity="success" icon={<CheckCircle />}>
-              <strong>Phase 3 Success:</strong> Dashboard now displays 100% real data from your Sunsynk inverter (2305156257). 
-              Battery SOC shows actual {metrics.battery_level.toFixed(1)}% charge level. Updates every 30 seconds.
-            </Alert>
-          </Grid>
         </Grid>
       </Container>
       ) : (
