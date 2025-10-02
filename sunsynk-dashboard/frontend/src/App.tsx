@@ -264,7 +264,7 @@ const App: React.FC = () => {
   };
 
   const getEnergyBalanceDescription = (balance: number) => {
-    if (balance > 1.5) return 'Excellent surplus - selling to grid';
+    if (balance > 1.5) return 'Excellent surplus';
     if (balance > 0.5) return 'Good surplus - charging battery';
     if (balance > -0.5) return 'Well balanced system';
     if (balance > -1.5) return 'Moderate deficit - using battery';

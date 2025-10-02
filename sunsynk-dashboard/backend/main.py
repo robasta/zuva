@@ -36,6 +36,17 @@ sys.path.insert(0, '/app')
 # Import Sunsynk client
 from sunsynk.client import SunsynkClient
 
+# Import Intelligent Alert System
+try:
+    from alerts.models import AlertConfiguration, AlertType, AlertSeverity as IntelligentAlertSeverity
+    from alerts.configuration import config_manager
+    from alerts.intelligent_monitor import IntelligentAlertMonitor
+    from alerts.weather_intelligence import weather_intelligence
+    INTELLIGENT_ALERTS_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Intelligent Alert System not available: {e}")
+    INTELLIGENT_ALERTS_AVAILABLE = False
+
 # Phase 6 ML Analytics Configuration
 PHASE6_AVAILABLE = True  # Enable Phase 6 ML features
 
@@ -471,6 +482,90 @@ class AlertManager:
         self.notification_preferences = NotificationPreferences(
             enabled_channels=[NotificationChannel.PUSH, NotificationChannel.EMAIL]
         )
+        
+        # Initialize Intelligent Alert System
+        self.intelligent_monitor = None
+        self.monitoring_task = None
+        if INTELLIGENT_ALERTS_AVAILABLE:
+            self.intelligent_monitor = IntelligentAlertMonitor()
+            logger.info("Intelligent Alert System initialized")
+    
+    async def start_intelligent_monitoring(self, user_id: str = "default"):
+        """Start intelligent monitoring for a user"""
+        if not INTELLIGENT_ALERTS_AVAILABLE or not self.intelligent_monitor:
+            logger.warning("Intelligent Alert System not available")
+            return
+        
+        try:
+            # Get or create default configuration
+            config = config_manager.get_configuration(user_id, AlertType.ENERGY_DEFICIT)
+            if not config:
+                config = config_manager.get_default_configuration(user_id, AlertType.ENERGY_DEFICIT)
+                config = config_manager.create_configuration(
+                    user_id=user_id,
+                    alert_type=AlertType.ENERGY_DEFICIT,
+                    **config.to_dict()
+                )
+            
+            # Start monitoring task
+            if not self.monitoring_task or self.monitoring_task.done():
+                self.monitoring_task = asyncio.create_task(
+                    self.intelligent_monitor.start_monitoring(config)
+                )
+                logger.info(f"Started intelligent monitoring for user {user_id}")
+        
+        except Exception as e:
+            logger.error(f"Failed to start intelligent monitoring: {e}")
+    
+    def stop_intelligent_monitoring(self):
+        """Stop intelligent monitoring"""
+        if self.intelligent_monitor:
+            self.intelligent_monitor.stop_monitoring()
+            if self.monitoring_task and not self.monitoring_task.done():
+                self.monitoring_task.cancel()
+            logger.info("Stopped intelligent monitoring")
+        
+        # Initialize Intelligent Alert System
+        self.intelligent_monitor = None
+        self.monitoring_task = None
+        if INTELLIGENT_ALERTS_AVAILABLE:
+            self.intelligent_monitor = IntelligentAlertMonitor()
+            logger.info("Intelligent Alert System initialized")
+    
+    async def start_intelligent_monitoring(self, user_id: str = "default"):
+        """Start intelligent monitoring for a user"""
+        if not INTELLIGENT_ALERTS_AVAILABLE or not self.intelligent_monitor:
+            logger.warning("Intelligent Alert System not available")
+            return
+        
+        try:
+            # Get or create default configuration
+            config = config_manager.get_configuration(user_id, AlertType.ENERGY_DEFICIT)
+            if not config:
+                config = config_manager.get_default_configuration(user_id, AlertType.ENERGY_DEFICIT)
+                config = config_manager.create_configuration(
+                    user_id=user_id,
+                    alert_type=AlertType.ENERGY_DEFICIT,
+                    **config.to_dict()
+                )
+            
+            # Start monitoring task
+            if not self.monitoring_task or self.monitoring_task.done():
+                self.monitoring_task = asyncio.create_task(
+                    self.intelligent_monitor.start_monitoring(config)
+                )
+                logger.info(f"Started intelligent monitoring for user {user_id}")
+        
+        except Exception as e:
+            logger.error(f"Failed to start intelligent monitoring: {e}")
+    
+    def stop_intelligent_monitoring(self):
+        """Stop intelligent monitoring"""
+        if self.intelligent_monitor:
+            self.intelligent_monitor.stop_monitoring()
+            if self.monitoring_task and not self.monitoring_task.done():
+                self.monitoring_task.cancel()
+            logger.info("Stopped intelligent monitoring")
     
     def create_alert(self, title: str, message: str, severity: AlertSeverity, 
                     category: str, metadata: Dict[str, Any] = None) -> Alert:
@@ -519,6 +614,45 @@ class AlertManager:
     def get_alert_history(self, hours: int = 24) -> List[Alert]:
         cutoff = datetime.now() - timedelta(hours=hours)
         return [alert for alert in self.alert_history if alert.timestamp >= cutoff]
+    
+    def get_recent_alerts(self, hours: int = 24) -> List[dict]:
+        """Get recent alerts as dictionaries for API responses"""
+        cutoff = datetime.now() - timedelta(hours=hours)
+        recent_alerts = []
+        
+        # Include active alerts
+        for alert in self.active_alerts.values():
+            if alert.timestamp >= cutoff:
+                recent_alerts.append({
+                    'id': alert.id,
+                    'title': alert.title,
+                    'message': alert.message,
+                    'severity': alert.severity.value,
+                    'status': 'active',
+                    'category': alert.category,
+                    'timestamp': alert.timestamp.isoformat(),
+                    'metadata': alert.metadata
+                })
+        
+        # Include historical alerts
+        for alert in self.alert_history:
+            if alert.timestamp >= cutoff:
+                recent_alerts.append({
+                    'id': alert.id,
+                    'title': alert.title,
+                    'message': alert.message,
+                    'severity': alert.severity.value,
+                    'status': alert.status.value,
+                    'category': alert.category,
+                    'timestamp': alert.timestamp.isoformat(),
+                    'acknowledged_at': alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
+                    'resolved_at': alert.resolved_at.isoformat() if alert.resolved_at else None,
+                    'metadata': alert.metadata
+                })
+        
+        # Sort by timestamp (most recent first)
+        recent_alerts.sort(key=lambda x: x['timestamp'], reverse=True)
+        return recent_alerts
     
     async def _send_notifications(self, alert: Alert):
         try:
@@ -1463,6 +1597,265 @@ async def get_system_monitoring_status(user: dict = Depends(verify_token)):
         "active_alerts": len(alert_manager.get_active_alerts()),
         "last_check": datetime.now().isoformat()
     }
+
+# Intelligent Alert Configuration Endpoints
+if INTELLIGENT_ALERTS_AVAILABLE:
+    
+    @app.get("/api/v1/alerts/config")
+    async def get_alert_configurations(user: dict = Depends(verify_token)):
+        """Get all alert configurations for the current user"""
+        try:
+            user_id = user.get("sub", "default")
+            
+            configurations = config_manager.get_user_configurations(user_id)
+            return {
+                "success": True,
+                "configurations": [config.to_dict() for config in configurations]
+            }
+        except Exception as e:
+            logger.error(f"Error getting alert configurations: {e}")
+            raise HTTPException(status_code=500, detail="Failed to get configurations")
+    
+    @app.post("/api/v1/alerts/config")
+    async def create_alert_configuration(request: dict, user: dict = Depends(verify_token)):
+        """Create new alert configuration"""
+        try:
+            user_id = user.get("sub", "default")
+            alert_type = AlertType(request.get('alert_type', 'energy_deficit'))
+            
+            # Remove user_id and alert_type from request for kwargs
+            config_params = {k: v for k, v in request.items() if k not in ['alert_type', 'user_id']}
+            
+            configuration = config_manager.create_configuration(
+                user_id=user_id,
+                alert_type=alert_type,
+                **config_params
+            )
+            
+            return {
+                "success": True,
+                "configuration": configuration.to_dict()
+            }
+        except Exception as e:
+            logger.error(f"Error creating alert configuration: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    @app.put("/api/v1/alerts/config/{alert_type}")
+    async def update_alert_configuration(alert_type: str, request: dict, user: dict = Depends(verify_token)):
+        """Update alert configuration"""
+        try:
+            user_id = user.get("sub", "default")
+            alert_type_enum = AlertType(alert_type)
+            
+            configuration = config_manager.update_configuration(
+                user_id=user_id,
+                alert_type=alert_type_enum,
+                updates=request
+            )
+            
+            return {
+                "success": True,
+                "configuration": configuration.to_dict()
+            }
+        except Exception as e:
+            logger.error(f"Error updating alert configuration: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    @app.get("/api/v1/alerts/weather/predictions")
+    async def get_weather_predictions(hours_ahead: int = 6, user: dict = Depends(verify_token)):
+        """Get weather-based energy deficit predictions"""
+        try:
+            user_id = user.get("sub", "default")
+            
+            # Get configuration
+            config = config_manager.get_configuration(user_id, AlertType.ENERGY_DEFICIT)
+            if not config:
+                config = config_manager.get_default_configuration(user_id, AlertType.ENERGY_DEFICIT)
+            
+            # Get predictions
+            predictions = await weather_intelligence.predict_energy_deficit(config, hours_ahead)
+            
+            return {
+                "success": True,
+                "predictions": [
+                    {
+                        "timestamp": pred.timestamp.isoformat(),
+                        "predicted_solar_power": pred.predicted_solar_power,
+                        "predicted_deficit": pred.predicted_deficit,
+                        "confidence": pred.confidence,
+                        "weather_factors": pred.weather_factors,
+                        "alert_recommended": pred.alert_recommended
+                    } for pred in predictions
+                ]
+            }
+        except Exception as e:
+            logger.error(f"Error getting weather predictions: {e}")
+            raise HTTPException(status_code=500, detail="Failed to get predictions")
+    
+    @app.get("/api/v1/alerts/weather/current-impact")
+    async def get_current_weather_impact(user: dict = Depends(verify_token)):
+        """Get real-time weather impact on solar generation"""
+        try:
+            impact = await weather_intelligence.get_realtime_weather_impact()
+            
+            return {
+                "success": True,
+                "weather_impact": impact
+            }
+        except Exception as e:
+            logger.error(f"Error getting weather impact: {e}")
+            raise HTTPException(status_code=500, detail="Failed to get weather impact")
+    
+    @app.post("/api/v1/alerts/monitoring/start")
+    async def start_monitoring(user: dict = Depends(verify_token)):
+        """Start intelligent alert monitoring"""
+        try:
+            user_id = user.get("sub", "default")
+            await alert_manager.start_intelligent_monitoring(user_id)
+            
+            return {
+                "success": True,
+                "message": "Intelligent monitoring started"
+            }
+        except Exception as e:
+            logger.error(f"Error starting monitoring: {e}")
+            raise HTTPException(status_code=500, detail="Failed to start monitoring")
+
+@app.get("/api/alerts/summary")
+async def get_alert_summary():
+    """Get alert summary statistics"""
+    try:
+        alerts = alert_manager.get_recent_alerts(hours=24)
+        
+        summary = {
+            "total": len(alerts),
+            "active": len([a for a in alerts if a.get("status") == "active"]),
+            "acknowledged": len([a for a in alerts if a.get("status") == "acknowledged"]),
+            "resolved": len([a for a in alerts if a.get("status") == "resolved"]),
+            "by_severity": {
+                "low": len([a for a in alerts if a.get("severity") == "low"]),
+                "medium": len([a for a in alerts if a.get("severity") == "medium"]),
+                "high": len([a for a in alerts if a.get("severity") == "high"]),
+                "critical": len([a for a in alerts if a.get("severity") == "critical"])
+            }
+        }
+        
+        return {"success": True, "summary": summary}
+    except Exception as e:
+        logger.error(f"Failed to get alert summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/alerts/status")
+async def get_monitoring_status():
+    """Get intelligent monitoring system status"""
+    try:
+        if not alert_manager.intelligent_monitor:
+            return {
+                "success": False,
+                "error": "Intelligent monitoring not initialized"
+            }
+        
+        # Get configuration validity
+        config_manager = alert_manager.intelligent_monitor.config_manager
+        config = config_manager.get_configuration()
+        
+        status = {
+            "intelligent_monitoring": alert_manager.intelligent_monitor.is_running,
+            "weather_intelligence": config.get("weather_intelligence", {}).get("enabled", False),
+            "smart_alerts": config.get("smart_alerts_enabled", False),
+            "last_check": datetime.now().isoformat(),
+            "next_check": (datetime.now() + timedelta(seconds=30)).isoformat(),
+            "configuration_valid": config is not None and len(config.get("alert_conditions", [])) > 0
+        }
+        
+        return {"success": True, "status": status}
+    except Exception as e:
+        logger.error(f"Failed to get monitoring status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/alerts/{alert_id}/acknowledge")
+async def acknowledge_alert(alert_id: str):
+    """Acknowledge an alert"""
+    try:
+        result = alert_manager.acknowledge_alert(alert_id)
+        if result:
+            return {"success": True, "message": "Alert acknowledged"}
+        else:
+            raise HTTPException(status_code=404, detail="Alert not found")
+    except Exception as e:
+        logger.error(f"Failed to acknowledge alert {alert_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/alerts/{alert_id}/resolve")
+async def resolve_alert(alert_id: str):
+    """Resolve an alert"""
+    try:
+        result = alert_manager.resolve_alert(alert_id)
+        if result:
+            return {"success": True, "message": "Alert resolved"}
+        else:
+            raise HTTPException(status_code=404, detail="Alert not found")
+    except Exception as e:
+        logger.error(f"Failed to resolve alert {alert_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/alerts/config/validate")
+async def validate_alert_configuration():
+    """Validate the current alert configuration"""
+    try:
+        if not alert_manager.intelligent_monitor:
+            return {
+                "success": False,
+                "error": "Intelligent monitoring not initialized"
+            }
+        
+        config_manager = alert_manager.intelligent_monitor.config_manager
+        config = config_manager.get_configuration()
+        
+        # Perform validation
+        validation_result = config_manager.validate_configuration(config)
+        
+        return {
+            "success": True,
+            "valid": validation_result.get("valid", False),
+            "errors": validation_result.get("errors", []),
+            "warnings": validation_result.get("warnings", [])
+        }
+    except Exception as e:
+        logger.error(f"Failed to validate configuration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup"""
+    logger.info("🚀 Starting Sunsynk Solar Dashboard Backend")
+    
+    # Start intelligent monitoring if available
+    if INTELLIGENT_ALERTS_AVAILABLE:
+        try:
+            await alert_manager.start_intelligent_monitoring()
+            await weather_intelligence.initialize()
+            logger.info("✅ Intelligent Alert System initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Intelligent Alert System: {e}")
+    
+    # Create system status alert
+    alert_manager.create_alert(
+        title="System Started",
+        message="Sunsynk Solar Dashboard backend is now online",
+        severity=AlertSeverity.LOW,
+        category="system"
+    )
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    logger.info("🔄 Shutting down Sunsynk Solar Dashboard Backend")
+    
+    # Stop intelligent monitoring
+    if INTELLIGENT_ALERTS_AVAILABLE:
+        alert_manager.stop_intelligent_monitoring()
+        logger.info("✅ Intelligent Alert System stopped")
 
 # WebSocket endpoint
 @app.websocket("/ws/dashboard")

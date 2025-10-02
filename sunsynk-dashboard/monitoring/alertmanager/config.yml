@@ -23,17 +23,14 @@ receivers:
         send_resolved: true
 
   - name: 'critical-alerts'
-    email_configs:
-      - to: 'admin@sunsynk.dashboard'
-        subject: '[CRITICAL] Sunsynk Alert'
     webhook_configs:
       - url: 'http://dashboard-api:8000/api/alerts/webhook'
         send_resolved: true
 
   - name: 'warning-alerts'
-    email_configs:
-      - to: 'admin@sunsynk.dashboard'
-        subject: '[WARNING] Sunsynk Alert'
+    webhook_configs:
+      - url: 'http://dashboard-api:8000/api/alerts/webhook'
+        send_resolved: true
 
 inhibit_rules:
   - source_match:
