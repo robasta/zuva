@@ -477,6 +477,86 @@ class RealSunsynkCollector:
             }
         }
 
+# Consumption monitoring helper functions
+def _is_current_time_in_monitoring_window(start_time="18:00", end_time="03:00"):
+    """Check if current time is within consumption monitoring window"""
+    from datetime import datetime, time
+    
+    now = datetime.now().time()
+    start = datetime.strptime(start_time, "%H:%M").time()
+    end = datetime.strptime(end_time, "%H:%M").time()
+    
+    # Handle cross-midnight window (e.g., 18:00 to 03:00)
+    if start > end:
+        return now >= start or now <= end
+    else:
+        return start <= now <= end
+
+async def _check_consumption_thresholds():
+    """Check current consumption against configured thresholds"""
+    try:
+        # Get current data
+        current_data = real_collector.get_current_data()
+        logger.info(f"🔍 DEBUG: Consumption monitoring - current_data: {current_data}")
+        
+        if not current_data:
+            logger.warning("⚠️ No consumption data available for threshold checking (current_data is None)")
+            return
+            
+        # Check if consumption data exists
+        metrics = current_data.get('metrics', {})
+        consumption_kw = metrics.get('consumption')
+        
+        logger.info(f"🔍 DEBUG: Consumption monitoring - metrics: {metrics}")
+        logger.info(f"🔍 DEBUG: Consumption monitoring - consumption_kw: {consumption_kw}")
+        
+        if consumption_kw is None:
+            logger.warning("⚠️ No consumption data available for threshold checking (consumption field is None)")
+            return
+            
+        # Check if we're in monitoring window
+        if not _is_current_time_in_monitoring_window():
+            return
+            
+        # Define thresholds (these should come from configuration)
+        thresholds = {
+            'critical': 1.0,  # 1000W
+            'high': 0.8,      # 800W  
+            'low': 0.7        # 700W
+        }
+        
+        # Check thresholds and create alerts
+        for severity, threshold in thresholds.items():
+            if consumption_kw >= threshold:
+                alert_title = f"High Consumption Alert ({severity.title()})"
+                alert_message = f"Consumption has reached {consumption_kw:.2f}kW, exceeding {severity} threshold of {threshold}kW"
+                
+                # Create alert
+                if severity == 'critical':
+                    alert_severity = AlertSeverity.CRITICAL
+                elif severity == 'high':
+                    alert_severity = AlertSeverity.HIGH
+                else:
+                    alert_severity = AlertSeverity.LOW
+                    
+                alert_manager.create_alert(
+                    title=alert_title,
+                    message=alert_message,
+                    severity=alert_severity,
+                    category="consumption",
+                    metadata={
+                        "consumption_kw": consumption_kw,
+                        "threshold_kw": threshold,
+                        "threshold_type": severity,
+                        "monitoring_window": "18:00-03:00"
+                    }
+                )
+                logger.info(f"🚨 Consumption alert created: {consumption_kw:.2f}kW exceeds {severity} threshold ({threshold}kW)")
+                break  # Only create one alert per check (highest severity)
+                
+    except Exception as e:
+        logger.error(f"Failed to check consumption thresholds: {e}")
+
 # Global instances
 influx_manager = InfluxDBManager()
 real_collector = RealSunsynkCollector()
@@ -880,6 +960,10 @@ class BackgroundTasks:
         
         task1 = asyncio.create_task(self.generate_real_data())
         self.tasks.append(task1)
+        
+        # Start consumption monitoring
+        task2 = asyncio.create_task(self.consumption_monitoring())
+        self.tasks.append(task2)
 
     async def stop_background_tasks(self):
         self.running = False
@@ -927,6 +1011,21 @@ class BackgroundTasks:
                 
             except Exception as e:
                 logger.error(f"❌ Error in real data collection: {e}")
+                await asyncio.sleep(60)
+                
+    async def consumption_monitoring(self):
+        """Monitor consumption thresholds and generate alerts"""
+        logger.info("🔍 Starting consumption threshold monitoring...")
+        
+        while self.running:
+            try:
+                await _check_consumption_thresholds()
+                await asyncio.sleep(120)  # Check every 2 minutes
+            except asyncio.CancelledError:
+                logger.info("Consumption monitoring task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"❌ Error in consumption monitoring: {e}")
                 await asyncio.sleep(60)
 
 background_tasks = BackgroundTasks()
@@ -2017,6 +2116,73 @@ async def create_test_alert(
     
     return {"message": "Test alert created", "alert": alert.model_dump()}
 
+@app.post("/api/debug/simulate-consumption")
+async def simulate_consumption_alert(consumption_watts: float = 700):
+    """Debug endpoint to simulate consumption for testing alerts"""
+    consumption_kw = consumption_watts / 1000  # Convert watts to kW
+    
+    logger.info(f"🔧 DEBUG: Simulating {consumption_watts}W ({consumption_kw}kW) consumption")
+    
+    # Check if we're in monitoring window
+    in_window = _is_current_time_in_monitoring_window()
+    
+    # Define thresholds
+    thresholds = {
+        'critical': 1.0,  # 1000W
+        'high': 0.8,      # 800W  
+        'low': 0.7        # 700W
+    }
+    
+    alerts_created = []
+    
+    # Check thresholds and create alerts
+    for severity, threshold in thresholds.items():
+        if consumption_kw >= threshold:
+            alert_title = f"High Consumption Alert ({severity.title()})"
+            alert_message = f"Consumption has reached {consumption_kw:.3f}kW ({consumption_watts}W), exceeding {severity} threshold of {threshold}kW"
+            
+            # Create alert
+            if severity == 'critical':
+                alert_severity = AlertSeverity.CRITICAL
+            elif severity == 'high':
+                alert_severity = AlertSeverity.HIGH
+            else:
+                alert_severity = AlertSeverity.LOW
+                
+            alert = alert_manager.create_alert(
+                title=alert_title,
+                message=alert_message,
+                severity=alert_severity,
+                category="consumption",
+                metadata={
+                    "consumption_kw": consumption_kw,
+                    "consumption_watts": consumption_watts,
+                    "threshold_kw": threshold,
+                    "threshold_type": severity,
+                    "monitoring_window": "18:00-03:00",
+                    "in_window": in_window,
+                    "simulated": True
+                }
+            )
+            alerts_created.append({
+                "severity": severity,
+                "threshold": threshold,
+                "consumption": consumption_kw,
+                "alert_id": alert.id
+            })
+            logger.info(f"🚨 Simulated consumption alert created: {consumption_kw:.3f}kW exceeds {severity} threshold ({threshold}kW)")
+            break  # Only create one alert per check (highest severity)
+    
+    return {
+        "success": True,
+        "consumption_watts": consumption_watts,
+        "consumption_kw": consumption_kw,
+        "in_monitoring_window": in_window,
+        "current_time": datetime.now().strftime("%H:%M"),
+        "alerts_created": alerts_created,
+        "message": f"Simulated {consumption_watts}W consumption - {'Alert created' if alerts_created else 'No alerts triggered'}"
+    }
+
 @app.get("/api/system/monitor")
 async def get_system_monitoring_status(user: dict = Depends(verify_token)):
     """Get current system monitoring status and alert conditions"""
@@ -2216,17 +2382,25 @@ async def get_monitoring_status():
                 "error": "Intelligent monitoring not initialized"
             }
         
-        # Get configuration validity
-        config_manager = alert_manager.intelligent_monitor.config_manager
-        config = config_manager.get_configuration()
+        # Get configuration validity - handle missing config_manager gracefully
+        try:
+            config_manager = getattr(alert_manager.intelligent_monitor, 'config_manager', None)
+            if config_manager:
+                config = config_manager.get_configuration()
+            else:
+                config = {"alert_conditions": [], "weather_intelligence": {"enabled": False}}
+        except AttributeError:
+            config = {"alert_conditions": [], "weather_intelligence": {"enabled": False}}
         
         status = {
-            "intelligent_monitoring": alert_manager.intelligent_monitor.is_running,
+            "intelligent_monitoring": getattr(alert_manager.intelligent_monitor, 'is_running', False),
             "weather_intelligence": config.get("weather_intelligence", {}).get("enabled", False),
             "smart_alerts": config.get("smart_alerts_enabled", False),
             "last_check": datetime.now().isoformat(),
             "next_check": (datetime.now() + timedelta(seconds=30)).isoformat(),
-            "configuration_valid": config is not None and len(config.get("alert_conditions", [])) > 0
+            "configuration_valid": config is not None and len(config.get("alert_conditions", [])) > 0,
+            "consumption_monitoring": True,  # Our consumption monitoring is active
+            "current_time_in_window": _is_current_time_in_monitoring_window()
         }
         
         return {"success": True, "status": status}
