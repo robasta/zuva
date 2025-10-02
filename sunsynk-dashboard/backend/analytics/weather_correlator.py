@@ -12,6 +12,13 @@ import pandas as pd
 import numpy as np
 from dataclasses import dataclass
 
+# Import weather API tracker for usage monitoring
+try:
+    from main import weather_api_tracker
+except ImportError:
+    # Fallback for when imported from different context
+    weather_api_tracker = None
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -93,6 +100,10 @@ class AdvancedWeatherAnalyzer:
                     }
                 
                 async with session.get(current_url, params=params) as response:
+                    # Track API usage
+                    if weather_api_tracker:
+                        weather_api_tracker.record_api_call()
+                        
                     if response.status != 200:
                         logger.error(f"Weather API error: {response.status}")
                         return None
@@ -146,6 +157,10 @@ class AdvancedWeatherAnalyzer:
                     }
                 
                 async with session.get(forecast_url, params=params) as response:
+                    # Track API usage
+                    if weather_api_tracker:
+                        weather_api_tracker.record_api_call()
+                        
                     if response.status != 200:
                         logger.error(f"Forecast API error: {response.status}")
                         return []
