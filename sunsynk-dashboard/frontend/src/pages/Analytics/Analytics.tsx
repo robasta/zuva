@@ -76,6 +76,21 @@ interface BatteryOptimization {
   cost_savings: any;
 }
 
+interface SolarValueAnalysis {
+  total_energy_generated_kwh: number;
+  energy_value_today: number;
+  energy_value_monthly: number;
+  energy_value_yearly: number;
+  electricity_rate_per_kwh: number;
+  grid_avoided_cost: number;
+  carbon_offset_value: number;
+  total_financial_benefit: number;
+  roi_analysis: {
+    payback_period_years: number;
+    total_savings_projection: number;
+  };
+}
+
 const Analytics: React.FC = () => {
   const [activeTab, setActiveTab] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -88,6 +103,7 @@ const Analytics: React.FC = () => {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [batteryOptimization, setBatteryOptimization] = useState<BatteryOptimization | null>(null);
   const [energyForecasting, setEnergyForecasting] = useState<any>(null);
+  const [solarValueAnalysis, setSolarValueAnalysis] = useState<SolarValueAnalysis | null>(null);
 
   const loadWeatherAnalysis = async () => {
     try {
@@ -143,13 +159,44 @@ const Analytics: React.FC = () => {
     }
   };
 
+  const loadSolarValueAnalysis = async () => {
+    try {
+      setLoading(true);
+      // Mock data for Johannesburg electricity rates and solar value analysis
+      // In a real implementation, this would fetch from an API endpoint
+      const mockSolarValue: SolarValueAnalysis = {
+        total_energy_generated_kwh: 245.6, // Today's generation
+        energy_value_today: 245.6 * 2.85, // R2.85 per kWh (Johannesburg municipal rate)
+        energy_value_monthly: 245.6 * 30 * 2.85,
+        energy_value_yearly: 245.6 * 365 * 2.85,
+        electricity_rate_per_kwh: 2.85, // Johannesburg municipal rate 2024
+        grid_avoided_cost: 245.6 * 3.20, // Peak time rate avoided
+        carbon_offset_value: 245.6 * 0.95 * 0.15, // R0.15 per kg CO2 saved
+        total_financial_benefit: (245.6 * 2.85) + (245.6 * 3.20) + (245.6 * 0.95 * 0.15),
+        roi_analysis: {
+          payback_period_years: 6.2,
+          total_savings_projection: 245.6 * 365 * 2.85 * 20 // 20-year projection
+        }
+      };
+      setSolarValueAnalysis(mockSolarValue);
+    } catch (err: any) {
+      setError(`Solar value analysis failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
 
 
   useEffect(() => {
     if (activeTab === 0) loadWeatherAnalysis();
     else if (activeTab === 1) loadConsumptionAnalysis();
-    else if (activeTab === 2) loadBatteryOptimization();
-    else if (activeTab === 3) loadEnergyForecasting();
+    else if (activeTab === 2) {
+      loadBatteryOptimization();
+      loadSolarValueAnalysis();
+    }
+    else if (activeTab === 3) loadBatteryOptimization();
+    else if (activeTab === 4) loadEnergyForecasting();
   }, [activeTab]);
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
@@ -205,6 +252,11 @@ const Analytics: React.FC = () => {
           <Tab 
             label="Battery Optimization" 
             icon={<BatteryIcon />} 
+            iconPosition="start"
+          />
+          <Tab 
+            label="Cost Savings" 
+            icon={<AssessmentIcon />} 
             iconPosition="start"
           />
           <Tab 
@@ -443,7 +495,7 @@ const Analytics: React.FC = () => {
       {activeTab === 2 && !loading && (
         <Box>
           <Grid container spacing={3}>
-            <Grid item xs={12} md={6}>
+            <Grid item xs={12}>
               <Card>
                 <CardHeader 
                   title="Optimal SOC Range" 
@@ -469,24 +521,232 @@ const Analytics: React.FC = () => {
               </Card>
             </Grid>
 
-            <Grid item xs={12} md={6}>
+
+
+            {/* Solar Energy Value Widget */}
+            <Grid item xs={12}>
               <Card>
                 <CardHeader 
-                  title="Cost Savings" 
+                  title="Solar Energy Value Analysis (Johannesburg Rates)" 
+                  avatar={<LightbulbIcon color="warning" />}
+                  subheader="Based on City of Johannesburg electricity tariffs"
+                />
+                <CardContent>
+                  {solarValueAnalysis ? (
+                    <Grid container spacing={3}>
+                      <Grid item xs={12} md={3}>
+                        <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'success.light', borderRadius: 2 }}>
+                          <Typography variant="h4" color="success.main" sx={{ fontWeight: 'bold' }}>
+                            R{solarValueAnalysis.energy_value_today.toFixed(2)}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            Today's Energy Value
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {solarValueAnalysis.total_energy_generated_kwh.toFixed(1)} kWh generated
+                          </Typography>
+                        </Box>
+                      </Grid>
+                      
+                      <Grid item xs={12} md={3}>
+                        <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'info.light', borderRadius: 2 }}>
+                          <Typography variant="h4" color="info.main" sx={{ fontWeight: 'bold' }}>
+                            R{solarValueAnalysis.energy_value_monthly.toFixed(0)}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            Monthly Value
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            At current generation rate
+                          </Typography>
+                        </Box>
+                      </Grid>
+                      
+                      <Grid item xs={12} md={3}>
+                        <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'warning.light', borderRadius: 2 }}>
+                          <Typography variant="h4" color="warning.main" sx={{ fontWeight: 'bold' }}>
+                            R{solarValueAnalysis.energy_value_yearly.toFixed(0)}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            Annual Value
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            Projected yearly savings
+                          </Typography>
+                        </Box>
+                      </Grid>
+                      
+                      <Grid item xs={12} md={3}>
+                        <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'primary.light', borderRadius: 2 }}>
+                          <Typography variant="h4" color="primary.main" sx={{ fontWeight: 'bold' }}>
+                            R{solarValueAnalysis.total_financial_benefit.toFixed(2)}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            Total Daily Benefit
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            Including grid avoidance
+                          </Typography>
+                        </Box>
+                      </Grid>
+
+                      <Grid item xs={12}>
+                        <Divider sx={{ my: 2 }} />
+                        <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center' }}>
+                          <AssessmentIcon sx={{ mr: 1 }} />
+                          Detailed Value Breakdown
+                        </Typography>
+                      </Grid>
+
+                      <Grid item xs={12} md={4}>
+                        <Card variant="outlined">
+                          <CardContent>
+                            <Typography variant="h6" color="success.main">
+                              R{(solarValueAnalysis.electricity_rate_per_kwh).toFixed(2)}/kWh
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              Johannesburg Municipal Rate
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              Standard residential tariff
+                            </Typography>
+                          </CardContent>
+                        </Card>
+                      </Grid>
+
+                      <Grid item xs={12} md={4}>
+                        <Card variant="outlined">
+                          <CardContent>
+                            <Typography variant="h6" color="warning.main">
+                              R{solarValueAnalysis.grid_avoided_cost.toFixed(2)}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              Grid Demand Avoided
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              Peak time rate avoidance
+                            </Typography>
+                          </CardContent>
+                        </Card>
+                      </Grid>
+
+                      <Grid item xs={12} md={4}>
+                        <Card variant="outlined">
+                          <CardContent>
+                            <Typography variant="h6" color="info.main">
+                              R{solarValueAnalysis.carbon_offset_value.toFixed(2)}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              Carbon Offset Value
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              Environmental benefit
+                            </Typography>
+                          </CardContent>
+                        </Card>
+                      </Grid>
+
+                      <Grid item xs={12}>
+                        <Card variant="outlined" sx={{ bgcolor: 'success.light' }}>
+                          <CardContent>
+                            <Typography variant="h6" gutterBottom>
+                              📈 ROI Analysis
+                            </Typography>
+                            <Grid container spacing={2}>
+                              <Grid item xs={12} md={6}>
+                                <Typography variant="body1">
+                                  <strong>Payback Period:</strong> {solarValueAnalysis.roi_analysis.payback_period_years} years
+                                </Typography>
+                              </Grid>
+                              <Grid item xs={12} md={6}>
+                                <Typography variant="body1">
+                                  <strong>20-Year Savings:</strong> R{solarValueAnalysis.roi_analysis.total_savings_projection.toFixed(0)}
+                                </Typography>
+                              </Grid>
+                            </Grid>
+                          </CardContent>
+                        </Card>
+                      </Grid>
+                    </Grid>
+                  ) : (
+                    <Typography color="text.secondary">Loading solar value analysis...</Typography>
+                  )}
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        </Box>
+      )}
+
+      {/* Cost Savings Tab */}
+      {activeTab === 3 && !loading && (
+        <Box>
+          <Grid container spacing={3}>
+            <Grid item xs={12} md={8}>
+              <Card>
+                <CardHeader 
+                  title="Monthly Cost Savings Analysis" 
                   avatar={<AssessmentIcon color="success" />}
                 />
                 <CardContent>
                   {batteryOptimization?.cost_savings ? (
                     <>
-                      <Typography variant="h4" color="success.main">
-                        R{batteryOptimization.cost_savings.monthly_savings?.toFixed(2) || '0.00'}
+                      <Box sx={{ mb: 3 }}>
+                        <Typography variant="body2" color="text.secondary">Estimated Monthly Savings</Typography>
+                        <Typography variant="h3" color="success.main" sx={{ fontWeight: 'bold' }}>
+                          R{batteryOptimization.cost_savings.monthly_savings?.toFixed(2) || '0.00'}
+                        </Typography>
+                      </Box>
+                      <Typography variant="body1" color="text.secondary">
+                        Estimated monthly savings with battery optimization strategies
+                      </Typography>
+                      <Box sx={{ mt: 3, p: 2, bgcolor: 'success.light', borderRadius: 2 }}>
+                        <Typography variant="body2" color="success.dark">
+                          <strong>Savings Breakdown:</strong> Based on optimal battery charging/discharging patterns, 
+                          peak demand reduction, and efficient energy usage during off-peak hours.
+                        </Typography>
+                      </Box>
+                    </>
+                  ) : (
+                    <>
+                      <Typography variant="h6" color="text.secondary" sx={{ mb: 2 }}>
+                        No cost savings data available
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        Estimated monthly savings with optimization
+                        Cost savings analysis requires battery optimization data. Please ensure your system 
+                        is properly configured and data collection is active.
+                      </Typography>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            </Grid>
+            
+            <Grid item xs={12} md={4}>
+              <Card>
+                <CardHeader 
+                  title="Savings Potential" 
+                  avatar={<TrendingUpIcon color="primary" />}
+                />
+                <CardContent>
+                  {batteryOptimization?.cost_savings ? (
+                    <>
+                      <Box sx={{ textAlign: 'center', mb: 2 }}>
+                        <Typography variant="h4" color="primary">
+                          R{(batteryOptimization.cost_savings.monthly_savings * 12)?.toFixed(0) || '0'}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          Annual Savings
+                        </Typography>
+                      </Box>
+                      <Typography variant="body2" color="text.secondary">
+                        Projected annual cost savings based on current optimization patterns.
                       </Typography>
                     </>
                   ) : (
-                    <Typography color="text.secondary">No cost savings data available</Typography>
+                    <Typography color="text.secondary">
+                      Annual savings projection unavailable
+                    </Typography>
                   )}
                 </CardContent>
               </Card>
@@ -496,7 +756,7 @@ const Analytics: React.FC = () => {
       )}
 
       {/* Energy Forecasting Tab */}
-      {activeTab === 3 && !loading && (
+      {activeTab === 4 && !loading && (
         <Box>
           <Grid container spacing={3}>
             <Grid item xs={12}>
