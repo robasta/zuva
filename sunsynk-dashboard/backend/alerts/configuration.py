@@ -29,7 +29,13 @@ class ConfigurationManager:
         """
         self.storage_backend = storage_backend
         self.configurations: Dict[str, AlertConfiguration] = {}
-        self.storage_path = "/tmp/alert_configurations.json"  # Would be configurable
+        
+        # Use persistent storage path - create directory if it doesn't exist
+        import os
+        self.storage_directory = "/app/config/alerts"
+        os.makedirs(self.storage_directory, exist_ok=True)
+        self.storage_path = os.path.join(self.storage_directory, "alert_configurations.json")
+        
         self._load_configurations()
     
     def _load_configurations(self):

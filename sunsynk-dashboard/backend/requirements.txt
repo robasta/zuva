@@ -16,6 +16,7 @@ python-multipart==0.0.6
 # Database & Data Processing
 influxdb-client==1.38.0
 aiofiles==23.2.1
+aiosqlite==0.19.0
 
 # HTTP Client (for external APIs)
 aiohttp==3.9.0

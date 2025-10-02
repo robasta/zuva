@@ -92,6 +92,10 @@ services:
       - ./analytics:/app/analytics
       - ../sunsynk:/app/sunsynk
       - ./logs:/app/logs
+      # Persistent application data
+      - app_data:/app/data
+      - alert_configs:/app/config/alerts
+      - system_settings:/app/config/settings
     networks:
       - sunsynk-network
     restart: unless-stopped
@@ -324,6 +328,13 @@ volumes:
   alertmanager_data:
     driver: local
   loki_data:
+    driver: local
+  # Application persistent storage
+  app_data:
+    driver: local
+  alert_configs:
+    driver: local
+  system_settings:
     driver: local
 
 networks:

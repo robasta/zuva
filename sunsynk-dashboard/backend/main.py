@@ -47,6 +47,14 @@ except ImportError as e:
     logging.warning(f"Intelligent Alert System not available: {e}")
     INTELLIGENT_ALERTS_AVAILABLE = False
 
+# Import Persistent Settings Manager
+try:
+    from components.settings_manager import settings_manager
+    SETTINGS_MANAGER_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Settings Manager not available: {e}")
+    SETTINGS_MANAGER_AVAILABLE = False
+
 # Phase 6 ML Analytics Configuration
 PHASE6_AVAILABLE = True  # Enable Phase 6 ML features
 
@@ -1540,6 +1548,174 @@ async def update_notification_preferences(
     alert_manager.notification_preferences = preferences
     return {"message": "Notification preferences updated successfully"}
 
+# ================================
+# PERSISTENT SETTINGS ENDPOINTS
+# ================================
+
+@app.get("/api/settings/{category}")
+async def get_settings_by_category(
+    category: str,
+    user: dict = Depends(verify_token)
+):
+    """Get all settings in a category for the current user"""
+    if not SETTINGS_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Settings manager not available")
+    
+    user_id = user.get("sub")
+    settings = await settings_manager.get_settings_by_category(category, user_id)
+    return {"category": category, "settings": settings}
+
+@app.get("/api/settings")
+async def get_all_user_settings(user: dict = Depends(verify_token)):
+    """Get all settings for the current user organized by category"""
+    if not SETTINGS_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Settings manager not available")
+    
+    user_id = user.get("sub")
+    settings = await settings_manager.get_user_settings(user_id)
+    return {"user_id": user_id, "settings": settings}
+
+@app.get("/api/settings/{category}/{key}")
+async def get_setting(
+    category: str,
+    key: str,
+    user: dict = Depends(verify_token)
+):
+    """Get a specific setting value"""
+    if not SETTINGS_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Settings manager not available")
+    
+    user_id = user.get("sub")
+    value = await settings_manager.get_setting(key, user_id)
+    
+    if value is None:
+        raise HTTPException(status_code=404, detail="Setting not found")
+    
+    return {"key": key, "value": value, "category": category}
+
+@app.put("/api/settings/{category}/{key}")
+async def set_setting(
+    category: str,
+    key: str,
+    request: dict,
+    user: dict = Depends(verify_token)
+):
+    """Set a setting value for the current user"""
+    if not SETTINGS_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Settings manager not available")
+    
+    if "value" not in request:
+        raise HTTPException(status_code=400, detail="Value is required")
+    
+    user_id = user.get("sub")
+    value = request["value"]
+    description = request.get("description")
+    
+    success = await settings_manager.set_setting(
+        key=key,
+        value=value,
+        category=category,
+        user_id=user_id,
+        description=description
+    )
+    
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save setting")
+    
+    return {"message": "Setting saved successfully", "key": key, "value": value}
+
+@app.put("/api/settings/{category}")
+async def update_category_settings(
+    category: str,
+    settings: dict,
+    user: dict = Depends(verify_token)
+):
+    """Update multiple settings in a category"""
+    if not SETTINGS_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Settings manager not available")
+    
+    user_id = user.get("sub")
+    updated_count = 0
+    errors = []
+    
+    for key, value in settings.items():
+        success = await settings_manager.set_setting(
+            key=key,
+            value=value,
+            category=category,
+            user_id=user_id
+        )
+        if success:
+            updated_count += 1
+        else:
+            errors.append(f"Failed to update {key}")
+    
+    return {
+        "message": f"Updated {updated_count} settings in {category}",
+        "updated_count": updated_count,
+        "errors": errors
+    }
+
+@app.delete("/api/settings/{category}/{key}")
+async def delete_setting(
+    category: str,
+    key: str,
+    user: dict = Depends(verify_token)
+):
+    """Delete a specific setting"""
+    if not SETTINGS_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Settings manager not available")
+    
+    user_id = user.get("sub")
+    success = await settings_manager.delete_setting(key, user_id)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Setting not found")
+    
+    return {"message": "Setting deleted successfully", "key": key}
+
+@app.post("/api/settings/export")
+async def export_user_settings(user: dict = Depends(verify_token)):
+    """Export all user settings as JSON"""
+    if not SETTINGS_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Settings manager not available")
+    
+    user_id = user.get("sub")
+    export_data = await settings_manager.export_settings(user_id)
+    return export_data
+
+@app.post("/api/settings/import")
+async def import_user_settings(
+    import_data: dict,
+    overwrite: bool = False,
+    user: dict = Depends(verify_token)
+):
+    """Import user settings from JSON data"""
+    if not SETTINGS_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Settings manager not available")
+    
+    user_id = user.get("sub")
+    imported_count = await settings_manager.import_settings(import_data, user_id, overwrite)
+    
+    return {
+        "message": f"Imported {imported_count} settings",
+        "imported_count": imported_count
+    }
+
+@app.post("/api/settings/reset")
+async def reset_user_settings(user: dict = Depends(verify_token)):
+    """Reset user settings to defaults"""
+    if not SETTINGS_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Settings manager not available")
+    
+    user_id = user.get("sub")
+    reset_count = await settings_manager.reset_to_defaults(user_id)
+    
+    return {
+        "message": f"Reset {reset_count} settings to defaults",
+        "reset_count": reset_count
+    }
+
 @app.post("/api/alerts/test")
 async def create_test_alert(
     severity: AlertSeverity = AlertSeverity.LOW,
@@ -1829,6 +2005,14 @@ async def validate_alert_configuration():
 async def startup_event():
     """Initialize services on startup"""
     logger.info("🚀 Starting Sunsynk Solar Dashboard Backend")
+    
+    # Initialize persistent settings manager
+    if SETTINGS_MANAGER_AVAILABLE:
+        try:
+            await settings_manager.initialize()
+            logger.info("✅ Persistent Settings Manager initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Settings Manager: {e}")
     
     # Start intelligent monitoring if available
     if INTELLIGENT_ALERTS_AVAILABLE:

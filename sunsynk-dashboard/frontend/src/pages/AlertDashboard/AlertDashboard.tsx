@@ -186,10 +186,74 @@ const AlertDashboard: React.FC = () => {
 
   const loadNotificationPreferences = async () => {
     try {
-      const response = await apiService.get<NotificationPreferences>('/notifications/preferences');
-      setNotificationPrefs(response);
+      // Get authentication token
+      const token = localStorage.getItem('auth_token');
+      if (!token) {
+        console.warn('No auth token available for loading preferences');
+        return;
+      }
+      
+      // Load from persistent settings
+      const response = await fetch('/api/settings/alerts', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const settings = data.settings;
+        
+        if (settings && Object.keys(settings).length > 0) {
+          setNotificationPrefs({
+            email_enabled: settings.email_enabled ?? true,
+            sms_enabled: settings.sms_enabled ?? false,
+            push_enabled: settings.push_enabled ?? true,
+            whatsapp_enabled: settings.whatsapp_enabled ?? false,
+            voice_enabled: settings.voice_enabled ?? false,
+            quiet_hours_enabled: settings.quiet_hours_enabled ?? false,
+            quiet_start: settings.quiet_start ?? '22:00',
+            quiet_end: settings.quiet_end ?? '07:00',
+            severity_threshold: settings.severity_threshold ?? 'medium'
+          });
+        }
+      }
     } catch (err: any) {
       console.error('Failed to load notification preferences:', err);
+    }
+  };
+
+  const loadBatteryConfiguration = async () => {
+    try {
+      // Get authentication token
+      const token = localStorage.getItem('auth_token');
+      if (!token) {
+        console.warn('No auth token available for loading battery config');
+        return;
+      }
+      
+      // Load from persistent settings
+      const response = await fetch('/api/settings/battery', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const settings = data.settings;
+        
+        if (settings && Object.keys(settings).length > 0) {
+          setBatteryConfig({
+            min_level_threshold: settings.min_level_threshold ?? 30,
+            critical_level: settings.critical_level ?? 15,
+            max_loss_threshold: settings.max_loss_threshold ?? 10,
+            loss_timeframe_minutes: settings.loss_timeframe_minutes ?? 60
+          });
+        }
+      }
+    } catch (err: any) {
+      console.error('Failed to load battery configuration:', err);
     }
   };
 
@@ -225,8 +289,43 @@ const AlertDashboard: React.FC = () => {
 
   const updateNotificationPreferences = async (prefs: NotificationPreferences) => {
     try {
-      await apiService.put('/notifications/preferences', prefs);
-      setNotificationPrefs(prefs);
+      // Get authentication token
+      const token = localStorage.getItem('auth_token');
+      if (!token) {
+        throw new Error('Authentication required');
+      }
+      
+      // Save notification preferences to persistent settings
+      const response = await fetch('/api/settings/alerts', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          email_enabled: prefs.email_enabled,
+          sms_enabled: prefs.sms_enabled,
+          push_enabled: prefs.push_enabled,
+          whatsapp_enabled: prefs.whatsapp_enabled,
+          voice_enabled: prefs.voice_enabled,
+          quiet_hours_enabled: prefs.quiet_hours_enabled,
+          quiet_start: prefs.quiet_start,
+          quiet_end: prefs.quiet_end,
+          severity_threshold: prefs.severity_threshold
+        })
+      });
+
+      if (response.ok) {
+        setNotificationPrefs(prefs);
+        setSnackbar({
+          open: true,
+          message: 'Notification preferences saved and will persist across restarts!',
+          severity: 'success'
+        });
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to save preferences');
+      }
     } catch (err: any) {
       setError(`Failed to update preferences: ${err.message}`);
     }
@@ -236,28 +335,31 @@ const AlertDashboard: React.FC = () => {
     try {
       setSavingBatteryConfig(true);
       
-      // Update battery alert configuration via API
-      const response = await fetch('/api/v1/alerts/config/battery_critical', {
+      // Get authentication token
+      const token = localStorage.getItem('auth_token');
+      if (!token) {
+        throw new Error('Authentication required');
+      }
+      
+      // Save battery configuration to persistent settings
+      const response = await fetch('/api/settings/battery', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({
-          enabled: true,
-          battery_thresholds: batteryConfig,
-          notification_channels: ['email', 'sms', 'push'],
-          severity_filter: 'medium'
-        })
+        body: JSON.stringify(batteryConfig)
       });
 
       if (response.ok) {
         setSnackbar({
           open: true,
-          message: 'Battery configuration saved successfully!',
+          message: 'Battery configuration saved successfully and will persist across restarts!',
           severity: 'success'
         });
       } else {
-        throw new Error('Failed to save configuration');
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to save configuration');
       }
     } catch (error: any) {
       setSnackbar({
@@ -274,6 +376,7 @@ const AlertDashboard: React.FC = () => {
     loadAlertSummary();
     loadAlerts();
     loadNotificationPreferences();
+    loadBatteryConfiguration();
     
     // Auto-refresh every 30 seconds
     const interval = setInterval(() => {
