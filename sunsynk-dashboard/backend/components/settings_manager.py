@@ -28,15 +28,23 @@ class SettingItem:
 class SettingsManager:
     """Manages persistent storage of application settings"""
     
-    def __init__(self, db_path: str = "/app/config/settings/settings.db"):
+    def __init__(self, db_path: str = "/app/data/settings.db"):
         """Initialize settings manager with SQLite database"""
         self.db_path = db_path
         
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        # Ensure directory exists with proper permissions
+        db_dir = os.path.dirname(db_path)
+        try:
+            os.makedirs(db_dir, exist_ok=True)
+            # Ensure the directory is writable
+            if not os.access(db_dir, os.W_OK):
+                logger.warning(f"Directory {db_dir} is not writable")
+        except Exception as e:
+            logger.error(f"Failed to create database directory {db_dir}: {e}")
         
         # Initialize database
         self._initialized = False
+        logger.info(f"Settings manager initialized with database path: {self.db_path}")
     
     async def initialize(self):
         """Initialize database and create tables if they don't exist"""

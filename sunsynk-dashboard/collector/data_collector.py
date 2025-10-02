@@ -117,12 +117,13 @@ class DataCollector:
             
             # Initialize weather collector if API key is provided
             if self.weather_api_key:
+                # Initialize with default location, will be updated dynamically
                 from weather_collector import WeatherCollector
                 self.weather_collector = WeatherCollector(
                     api_key=self.weather_api_key,
                     location=self.location
                 )
-                logger.info("Weather collector initialized")
+                logger.info("Weather collector initialized with default location")
             else:
                 logger.warning("Weather API key not provided, weather data will not be collected")
             
@@ -142,6 +143,51 @@ class DataCollector:
             system_health.increment_error_count()
             return False
     
+    async def _update_weather_collector_config(self):
+        """Update weather collector configuration based on user settings."""
+        if not self.weather_api_key:
+            return
+            
+        try:
+            # Check if we need to update configuration (every 5 minutes)
+            now = datetime.now()
+            if (hasattr(self, '_last_weather_config_check') and 
+                self._last_weather_config_check and 
+                (now - self._last_weather_config_check).total_seconds() < 300):
+                return
+            
+            self._last_weather_config_check = now
+            
+            # Try to get settings from environment variables for override
+            location_type = os.getenv('WEATHER_LOCATION_TYPE', 'city')
+            
+            if location_type == 'coordinates':
+                latitude = os.getenv('WEATHER_LATITUDE')
+                longitude = os.getenv('WEATHER_LONGITUDE')
+                
+                if latitude and longitude:
+                    from weather_collector import WeatherCollector
+                    self.weather_collector = WeatherCollector(
+                        api_key=self.weather_api_key,
+                        latitude=float(latitude),
+                        longitude=float(longitude)
+                    )
+                    logger.info(f"Weather collector updated to use coordinates: {latitude}, {longitude}")
+            else:
+                # Use city location (default or from environment)
+                city = os.getenv('WEATHER_CITY', self.location)
+                if not hasattr(self.weather_collector, 'location') or city != self.weather_collector.location:
+                    from weather_collector import WeatherCollector
+                    self.weather_collector = WeatherCollector(
+                        api_key=self.weather_api_key,
+                        location=city
+                    )
+                    logger.info(f"Weather collector updated to use city: {city}")
+                    
+        except Exception as e:
+            logger.warning(f"Failed to update weather collector configuration: {e}")
+            # Continue with existing configuration
+    
     async def _collection_loop(self):
         """Main data collection loop."""
         logger.info("Starting data collection loop...")
@@ -149,6 +195,9 @@ class DataCollector:
         while self.running:
             try:
                 start_time = asyncio.get_event_loop().time()
+                
+                # Update weather collector configuration periodically
+                await self._update_weather_collector_config()
                 
                 # Collect solar data
                 await self._collect_solar_data()

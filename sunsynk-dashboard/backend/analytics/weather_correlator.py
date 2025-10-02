@@ -42,10 +42,29 @@ class AdvancedWeatherAnalyzer:
     Provides detailed weather-solar production correlation analysis
     """
     
-    def __init__(self, api_key: str, location: str = "Randburg,ZA"):
+    def __init__(self, api_key: str, location: str = None, latitude: float = None, longitude: float = None):
         self.api_key = api_key
-        self.location = location
         self.base_url = "http://api.openweathermap.org/data/2.5"
+        
+        # Determine location type and parse accordingly
+        if latitude is not None and longitude is not None:
+            # Using coordinates
+            self.use_coordinates = True
+            self.latitude = float(latitude)
+            self.longitude = float(longitude)
+            self.location = f"{latitude},{longitude}"
+        elif location:
+            # Using city name
+            self.use_coordinates = False
+            self.location = location
+            self.latitude = None
+            self.longitude = None
+        else:
+            # Default to Randburg, ZA
+            self.use_coordinates = False
+            self.location = "Randburg,ZA"
+            self.latitude = None
+            self.longitude = None
         
         # Solar radiation estimation constants
         self.MAX_SOLAR_RADIATION = 1000  # W/m² (peak solar radiation)
@@ -57,11 +76,21 @@ class AdvancedWeatherAnalyzer:
             async with aiohttp.ClientSession() as session:
                 # Current weather
                 current_url = f"{self.base_url}/weather"
-                params = {
-                    'q': self.location,
-                    'appid': self.api_key,
-                    'units': 'metric'
-                }
+                
+                # Build parameters based on location type
+                if self.use_coordinates:
+                    params = {
+                        'lat': self.latitude,
+                        'lon': self.longitude,
+                        'appid': self.api_key,
+                        'units': 'metric'
+                    }
+                else:
+                    params = {
+                        'q': self.location,
+                        'appid': self.api_key,
+                        'units': 'metric'
+                    }
                 
                 async with session.get(current_url, params=params) as response:
                     if response.status != 200:
@@ -100,11 +129,21 @@ class AdvancedWeatherAnalyzer:
         try:
             async with aiohttp.ClientSession() as session:
                 forecast_url = f"{self.base_url}/forecast"
-                params = {
-                    'q': self.location,
-                    'appid': self.api_key,
-                    'units': 'metric'
-                }
+                
+                # Build parameters based on location type
+                if self.use_coordinates:
+                    params = {
+                        'lat': self.latitude,
+                        'lon': self.longitude,
+                        'appid': self.api_key,
+                        'units': 'metric'
+                    }
+                else:
+                    params = {
+                        'q': self.location,
+                        'appid': self.api_key,
+                        'units': 'metric'
+                    }
                 
                 async with session.get(forecast_url, params=params) as response:
                     if response.status != 200:

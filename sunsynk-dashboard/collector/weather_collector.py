@@ -16,24 +16,46 @@ logger = logging.getLogger(__name__)
 class WeatherCollector:
     """Weather data collector using OpenWeatherMap API."""
     
-    def __init__(self, api_key: str, location: str):
-        """Initialize weather collector."""
+    def __init__(self, api_key: str, location: str = None, latitude: float = None, longitude: float = None):
+        """Initialize weather collector.
+        
+        Args:
+            api_key: OpenWeatherMap API key
+            location: City name and country code (e.g., "Cape Town,ZA")
+            latitude: Latitude coordinate (use with longitude)
+            longitude: Longitude coordinate (use with latitude)
+        """
         self.api_key = api_key
-        self.location = location
         self.base_url = "http://api.openweathermap.org/data/2.5"
         self.uv_url = "http://api.openweathermap.org/data/2.5/uvi"
         
-        # Parse location (city,country_code format)
-        location_parts = location.split(',')
-        self.city = location_parts[0].strip()
-        self.country_code = location_parts[1].strip() if len(location_parts) > 1 else ''
+        # Determine location type and parse accordingly
+        if latitude is not None and longitude is not None:
+            # Using coordinates
+            self.use_coordinates = True
+            self.latitude = float(latitude)
+            self.longitude = float(longitude)
+            self.location = f"{latitude},{longitude}"
+            self.city = f"Lat:{latitude}, Lon:{longitude}"
+            self.country_code = ""
+        elif location:
+            # Using city name
+            self.use_coordinates = False
+            self.location = location
+            location_parts = location.split(',')
+            self.city = location_parts[0].strip()
+            self.country_code = location_parts[1].strip() if len(location_parts) > 1 else ''
+            self.latitude = None
+            self.longitude = None
+        else:
+            raise ValueError("Either location (city) or latitude/longitude coordinates must be provided")
         
         # Cache for reducing API calls
         self._weather_cache = None
         self._cache_time = None
         self._cache_duration = 600  # 10 minutes
         
-        logger.info(f"Weather collector initialized for {self.location}")
+        logger.info(f"Weather collector initialized for {self.location} (coordinates: {self.use_coordinates})")
     
     async def get_current_weather(self) -> Optional[Dict[str, Any]]:
         """Get current weather data with solar correlation metrics."""
@@ -72,11 +94,21 @@ class WeatherCollector:
         """Fetch current weather from OpenWeatherMap."""
         try:
             url = f"{self.base_url}/weather"
-            params = {
-                'q': f"{self.city},{self.country_code}",
-                'appid': self.api_key,
-                'units': 'metric'
-            }
+            
+            # Build parameters based on location type
+            if self.use_coordinates:
+                params = {
+                    'lat': self.latitude,
+                    'lon': self.longitude,
+                    'appid': self.api_key,
+                    'units': 'metric'
+                }
+            else:
+                params = {
+                    'q': f"{self.city},{self.country_code}",
+                    'appid': self.api_key,
+                    'units': 'metric'
+                }
             
             async with session.get(url, params=params, timeout=30) as response:
                 if response.status == 200:
@@ -121,12 +153,23 @@ class WeatherCollector:
         """Fetch weather forecast for sunshine hours calculation."""
         try:
             url = f"{self.base_url}/forecast"
-            params = {
-                'q': f"{self.city},{self.country_code}",
-                'appid': self.api_key,
-                'units': 'metric',
-                'cnt': 8  # Next 24 hours (3-hour intervals)
-            }
+            
+            # Build parameters based on location type
+            if self.use_coordinates:
+                params = {
+                    'lat': self.latitude,
+                    'lon': self.longitude,
+                    'appid': self.api_key,
+                    'units': 'metric',
+                    'cnt': 8  # Next 24 hours (3-hour intervals)
+                }
+            else:
+                params = {
+                    'q': f"{self.city},{self.country_code}",
+                    'appid': self.api_key,
+                    'units': 'metric',
+                    'cnt': 8  # Next 24 hours (3-hour intervals)
+                }
             
             async with session.get(url, params=params, timeout=30) as response:
                 if response.status == 200:
@@ -210,7 +253,7 @@ class WeatherCollector:
             return 0.0
     
     def _calculate_sun_elevation(self, timestamp: int) -> float:
-        """Calculate sun elevation angle (simplified calculation)."""
+        """Calculate sun elevation angle using actual coordinates when available."""
         try:
             # This is a simplified calculation - for production use a proper solar position library
             dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
@@ -221,11 +264,19 @@ class WeatherCollector:
             # Declination angle (simplified)
             declination = 23.45 * math.sin(math.radians(360 * (284 + day_of_year) / 365))
             
-            # Hour angle (simplified - assumes location at 0° longitude)
-            hour_angle = 15 * (dt.hour - 12)
+            # Use actual coordinates if available, otherwise default to Cape Town
+            if self.use_coordinates and self.latitude is not None:
+                latitude = self.latitude
+                longitude = self.longitude
+            else:
+                # Default coordinates for Cape Town
+                latitude = -33.9249
+                longitude = 18.4241
             
-            # Assume latitude for Cape Town (-33.9249° S) - this should be configurable
-            latitude = -33.9249
+            # Hour angle (accounting for longitude)
+            local_time_offset = longitude / 15  # Convert longitude to hours
+            local_solar_hour = dt.hour + dt.minute/60 + dt.second/3600 + local_time_offset
+            hour_angle = 15 * (local_solar_hour - 12)
             
             # Sun elevation angle
             elevation = math.asin(

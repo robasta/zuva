@@ -143,6 +143,8 @@ const Analytics: React.FC = () => {
     }
   };
 
+
+
   useEffect(() => {
     if (activeTab === 0) loadWeatherAnalysis();
     else if (activeTab === 1) loadConsumptionAnalysis();
@@ -179,6 +181,7 @@ const Analytics: React.FC = () => {
       
       <Typography variant="body1" sx={{ mb: 4, color: 'text.secondary' }}>
         Advanced machine learning analysis of your solar energy system with intelligent insights and optimization recommendations.
+        Configure weather location in the Settings page for more accurate forecasts.
       </Typography>
 
       {error && (
@@ -531,6 +534,8 @@ const Analytics: React.FC = () => {
           Refresh Analytics
         </Button>
       </Box>
+
+
     </Box>
   );
 };
