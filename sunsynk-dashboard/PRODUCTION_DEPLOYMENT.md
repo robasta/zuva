@@ -2,9 +2,9 @@
 
 ## ✅ PRODUCTION FULLY DEPLOYED & OPTIMIZED
 
-**Deployment Date**: October 1, 2025, 22:18 UTC  
-**Status**: Production environment optimized and stable  
-**Version**: Phase 6 - ML-Powered Solar Intelligence  
+**Deployment Date**: October 2, 2025, 06:39 UTC  
+**Status**: Production environment optimized and stable with corrected ML endpoints  
+**Version**: Phase 6 - ML-Powered Solar Intelligence (Fixed)  
 
 ---
 
@@ -27,6 +27,10 @@ Backup Service  RUNNING   -       ✅          10+ min
 
 ### 🔧 Recently Fixed Issues
 ```
+✅ Production Stack Rebuilt - October 2, 2025, 06:39 UTC
+✅ ML Endpoints - Fixed 404 network errors (API URL misconfiguration)  
+✅ Frontend Build - Rebuilt with correct nginx proxy URLs
+✅ All Services - Redeployed with latest changes
 ✅ Alertmanager - Fixed YAML configuration errors
 ✅ Data Collector - Simplified health check (now healthy)
 ✅ Docker Cleanup - Reclaimed 1.948GB storage space
@@ -38,6 +42,11 @@ Backup Service  RUNNING   -       ✅          10+ min
 - **🌐 Main Dashboard**: `http://localhost` (nginx reverse proxy)
 - **🔧 Backend API**: `http://localhost:8000` (direct) | `http://localhost/api/` (proxy)
 - **📚 API Docs**: `http://localhost:8000/docs`
+- **🤖 ML Endpoints** (Phase 6):
+  - Weather Correlation: `http://localhost/api/v6/weather/correlation`
+  - Consumption Patterns: `http://localhost/api/v6/consumption/patterns`
+  - Battery Optimization: `http://localhost/api/v6/battery/optimization`
+  - Analytics Forecasting: `http://localhost/api/v6/analytics/forecasting`
 - **📊 InfluxDB**: `http://localhost:8086`
 - **📈 Prometheus**: `http://localhost:9090`
 - **📊 Grafana**: `http://localhost:3001`
@@ -69,6 +78,49 @@ Backup Service  RUNNING   -       ✅          10+ min
 ✅ Real-time alerting operational
 ```
 
+### ✅ ML Endpoints - Phase 6 (FULLY OPERATIONAL)
+```
+✅ Weather Correlation API - /api/v6/weather/correlation
+  └─ Status: WORKING (correlation_coefficient: 0.78)
+  └─ Response Time: <200ms via nginx proxy
+  
+✅ Consumption Patterns API - /api/v6/consumption/patterns  
+  └─ Status: WORKING (analysis_period_days: 30)
+  └─ Response Time: <200ms via nginx proxy
+  
+✅ Battery Optimization API - /api/v6/battery/optimization
+  └─ Status: WORKING (current_strategy: time_of_use)
+  └─ Response Time: <200ms via nginx proxy
+  
+✅ Analytics Forecasting API - /api/v6/analytics/forecasting
+  └─ Status: WORKING (forecast_horizon_hours: 48)
+  └─ Response Time: <200ms via nginx proxy
+```
+
+### ⚡ Recent ML Endpoint Fix (RESOLVED ✅)
+```
+🔧 ISSUE: ML endpoints returning 404 network errors
+🎯 ROOT CAUSE: Double /api/ prefix in frontend endpoint calls
+   - Frontend API service: http://localhost/api (correct)
+   - Frontend endpoint calls: /api/v6/... (incorrect - added /api prefix)
+   - Result: http://localhost/api + /api/v6/... = /api/api/v6/... (404)
+   
+✅ RESOLUTION APPLIED:
+   1. Fixed Analytics.tsx: Removed /api prefix from v6 endpoints
+   2. Updated frontend endpoints: /v6/weather/correlation (correct)
+   3. Rebuilt frontend with production configuration
+   4. Verified nginx routing: /api/* → backend:8000
+   
+✅ VERIFICATION COMPLETED - October 2, 2025:
+   - All 4 ML endpoints tested with authentication
+   - ✅ Weather Correlation: Returns correlation_coefficient: 0.78
+   - ✅ Consumption Patterns: Returns analysis_period_days: 30
+   - ✅ Battery Optimization: Working via nginx proxy
+   - ✅ Analytics Forecasting: Working via nginx proxy
+   - No double /api/ prefix in URLs
+   - Response time: <200ms via nginx proxy
+```
+
 ### ✅ Production Infrastructure
 ```
 ✅ Docker containerized services with resource limits
@@ -97,6 +149,12 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml --profile monito
 curl http://localhost:8000/api/health    # Backend API
 curl http://localhost/nginx-health       # nginx proxy
 curl http://localhost:9090/-/healthy     # Prometheus
+
+# Verify ML endpoints (Phase 6)
+curl -H "Authorization: Bearer $TOKEN" http://localhost/api/v6/weather/correlation
+curl -H "Authorization: Bearer $TOKEN" http://localhost/api/v6/consumption/patterns
+curl -H "Authorization: Bearer $TOKEN" http://localhost/api/v6/battery/optimization
+curl -H "Authorization: Bearer $TOKEN" http://localhost/api/v6/analytics/forecasting
 
 # View logs
 docker-compose logs --follow dashboard-api

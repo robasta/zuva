@@ -28,6 +28,7 @@ import { formatPower, formatPowerWithSign } from './utils/powerUtils';
 import Analytics from './pages/Analytics/Analytics';
 import NotificationCenter from './components/Notifications/NotificationCenter';
 import ToastNotification from './components/Notifications/ToastNotification';
+import { apiService } from './services/apiService';
 
 const REFRESH_INTERVAL = 30000; // 30 seconds
 import './App.css';
@@ -101,6 +102,11 @@ const App: React.FC = () => {
       const authData = await authResponse.json();
       const token = authData.access_token;
 
+      // Store token in apiService for all future requests
+      apiService.setToken(token);
+      localStorage.setItem('auth_token', token);
+      localStorage.setItem('auth_expiry', (Date.now() + 24 * 60 * 60 * 1000).toString()); // 24 hours
+
       // Then fetch dashboard data
       const dashboardResponse = await fetch('/api/dashboard/current', {
         headers: {
@@ -124,6 +130,14 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    // Initialize token from localStorage if available
+    const savedToken = localStorage.getItem('auth_token');
+    const savedExpiry = localStorage.getItem('auth_expiry');
+    
+    if (savedToken && savedExpiry && Date.now() < parseInt(savedExpiry)) {
+      apiService.setToken(savedToken);
+    }
+
     fetchDashboardData();
     
     // Set up periodic refresh

@@ -88,9 +88,14 @@ services:
 
   # Frontend Production Configuration
   web-dashboard:
+    build:
+      context: ./frontend
+      args:
+        - REACT_APP_API_URL=http://localhost/api
     restart: always
     environment:
       - NODE_ENV=production
+      - REACT_APP_API_URL=http://localhost/api
     deploy:
       resources:
         limits:

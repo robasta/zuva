@@ -92,7 +92,7 @@ const Analytics: React.FC = () => {
   const loadWeatherAnalysis = async () => {
     try {
       setLoading(true);
-      const response = await apiService.get<WeatherCorrelation>('/api/v6/weather/correlation?days=7');
+      const response = await apiService.get<WeatherCorrelation>('/v6/weather/correlation?days=7');
       setWeatherCorrelation(response);
     } catch (err: any) {
       setError(`Weather analysis failed: ${err.message}`);
@@ -108,7 +108,7 @@ const Analytics: React.FC = () => {
         patterns: ConsumptionPattern[];
         anomalies: Anomaly[];
         optimization_recommendations: Recommendation[];
-      }>('/api/v6/consumption/patterns?days=30');
+      }>('/v6/consumption/patterns?days=30');
       setConsumptionPatterns(response.patterns || []);
       setAnomalies(response.anomalies || []);
       setRecommendations(response.optimization_recommendations || []);
@@ -122,7 +122,7 @@ const Analytics: React.FC = () => {
   const loadBatteryOptimization = async () => {
     try {
       setLoading(true);
-      const response = await apiService.get<BatteryOptimization>('/api/v6/battery/optimization');
+      const response = await apiService.get<BatteryOptimization>('/v6/battery/optimization');
       setBatteryOptimization(response);
     } catch (err: any) {
       setError(`Battery optimization failed: ${err.message}`);
@@ -134,7 +134,7 @@ const Analytics: React.FC = () => {
   const loadEnergyForecasting = async () => {
     try {
       setLoading(true);
-      const response = await apiService.get<any>('/api/v6/analytics/forecasting?hours=48');
+      const response = await apiService.get<any>('/v6/analytics/forecasting?hours=48');
       setEnergyForecasting(response);
     } catch (err: any) {
       setError(`Energy forecasting failed: ${err.message}`);
