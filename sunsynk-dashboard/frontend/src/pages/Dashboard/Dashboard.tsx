@@ -16,6 +16,7 @@ import {
 import {
   Battery80,
   WbSunny,
+  SolarPower,
   ElectricalServices,
   Home,
   Refresh,
@@ -23,8 +24,13 @@ import {
   Error as ErrorIcon,
   TrendingUp,
   TrendingDown,
-  Balance
+  Balance,
+  CloudQueue,
+  Thermostat,
+  Air,
+  Visibility
 } from '@mui/icons-material';
+import { formatTimeWithTimezone, formatDateTimeWithTimezone } from '../../utils/timezone';
 
 const REFRESH_INTERVAL = 30000; // 30 seconds
 
@@ -46,15 +52,26 @@ interface SystemStatus {
   grid_status: string;
 }
 
+interface WeatherForecast {
+  time: string;
+  temperature: number;
+  condition: string;
+  humidity: number;
+  wind_speed: number;
+  visibility: number;
+}
+
 interface DashboardData {
   metrics: DashboardMetrics;
   status: SystemStatus;
+  weather_forecast?: WeatherForecast[];
 }
 
 export const Dashboard: React.FC = () => {
-  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [weatherForecast, setWeatherForecast] = useState<WeatherForecast[]>([]);
   const [lastUpdate, setLastUpdate] = useState<string>('');
 
   // Utility functions
@@ -105,9 +122,9 @@ export const Dashboard: React.FC = () => {
         throw new Error('Failed to fetch dashboard data');
       }
 
-      const data = await dashboardResponse.json();
-      setDashboardData(data);
-      setLastUpdate(new Date().toLocaleTimeString());
+            const data = await dashboardResponse.json();
+      setData(data);
+      setLastUpdate(formatTimeWithTimezone(new Date()));
       setLoading(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error occurred');
@@ -197,13 +214,13 @@ export const Dashboard: React.FC = () => {
     );
   }
 
-  if (!dashboardData) {
+  if (!data) {
     return (
       <Alert severity="warning">No dashboard data available</Alert>
     );
   }
 
-  const { metrics, status } = dashboardData;
+  const { metrics, status } = data;
 
   return (
     <Container maxWidth="xl" sx={{ mt: 2, mb: 4 }}>
@@ -245,7 +262,7 @@ export const Dashboard: React.FC = () => {
           <Card sx={{ height: '100%' }}>
             <CardContent>
               <Box display="flex" alignItems="center" mb={2}>
-                <WbSunny sx={{ color: '#ff9800', mr: 1 }} />
+                <SolarPower sx={{ color: '#ff9800', mr: 1 }} />
                 <Typography variant="h6">Solar Generation</Typography>
               </Box>
               <Typography variant="h3" component="div" color="primary">
@@ -382,43 +399,77 @@ export const Dashboard: React.FC = () => {
           </Card>
         </Grid>
 
-        {/* System Status */}
+        {/* Weather Info */}
         <Grid item xs={12} md={6}>
           <Card sx={{ height: '100%' }}>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                🔧 System Status
-              </Typography>
-              <Grid container spacing={2}>
-                <Grid item xs={12}>
-                  <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                    <Typography variant="body1">Inverter:</Typography>
-                    <Chip 
-                      label={status.inverter_status}
-                      color={status.inverter_status === 'online' ? 'success' : 'error'}
-                      size="small"
-                    />
+              <Box display="flex" alignItems="center" mb={2}>
+                <CloudQueue sx={{ color: '#2196f3', mr: 1 }} />
+                <Typography variant="h6">Weather Forecast</Typography>
+              </Box>
+              {weatherForecast.length > 0 ? (
+                <Box>
+                  {/* Current Hour */}
+                  <Box sx={{ mb: 2, p: 2, bgcolor: 'primary.light', borderRadius: 2 }}>
+                    <Typography variant="subtitle2" color="primary.contrastText">Current Hour</Typography>
+                    <Box display="flex" alignItems="center" gap={2}>
+                      <Typography variant="h4" color="primary.contrastText">
+                        {Math.round(weatherForecast[0]?.temperature || metrics.temperature)}°C
+                      </Typography>
+                      <Box>
+                        <Typography variant="body2" color="primary.contrastText">
+                          {weatherForecast[0]?.condition || metrics.weather_condition}
+                        </Typography>
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <Air sx={{ fontSize: 16, color: 'primary.contrastText' }} />
+                          <Typography variant="caption" color="primary.contrastText">
+                            {weatherForecast[0]?.wind_speed || 'N/A'} km/h
+                          </Typography>
+                          <Visibility sx={{ fontSize: 16, color: 'primary.contrastText', ml: 1 }} />
+                          <Typography variant="caption" color="primary.contrastText">
+                            {weatherForecast[0]?.visibility || 'N/A'} km
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Box>
                   </Box>
-                </Grid>
-                <Grid item xs={12}>
-                  <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                    <Typography variant="body1">Grid Connection:</Typography>
-                    <Chip 
-                      label={status.grid_status}
-                      color={status.grid_status === 'connected' ? 'success' : 'warning'}
-                      size="small"
-                    />
-                  </Box>
-                </Grid>
-                <Grid item xs={12}>
-                  <Box display="flex" justifyContent="space-between" alignItems="center">
-                    <Typography variant="body1">Last Update:</Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {new Date(status.last_update).toLocaleString()}
-                    </Typography>
-                  </Box>
-                </Grid>
-              </Grid>
+                  {/* Rest of Day Forecast */}
+                  <Typography variant="subtitle2" gutterBottom>Rest of Day</Typography>
+                  <Grid container spacing={1}>
+                    {weatherForecast.slice(1, 7).map((forecast, index) => (
+                      <Grid item xs={2} key={index}>
+                        <Box textAlign="center" sx={{ p: 1, bgcolor: 'grey.100', borderRadius: 1 }}>
+                          <Typography variant="caption" display="block">
+                            {new Date(forecast.time).toLocaleString('en-ZA', {
+                              timeZone: 'Africa/Johannesburg',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}:00
+                          </Typography>
+                          <Typography variant="body2" fontWeight="bold">
+                            {Math.round(forecast.temperature)}°
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {forecast.condition.split(' ')[0]}
+                          </Typography>
+                        </Box>
+                      </Grid>
+                    ))}
+                  </Grid>
+                </Box>
+              ) : (
+                <Box>
+                  <Typography variant="h4" color="primary">
+                    {metrics.temperature}°C
+                  </Typography>
+                  <Typography variant="body1" color="text.secondary">
+                    {metrics.weather_condition}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                    Detailed forecast loading...
+                  </Typography>
+                </Box>
+              )}
             </CardContent>
           </Card>
         </Grid>

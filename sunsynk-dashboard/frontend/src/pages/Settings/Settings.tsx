@@ -51,9 +51,11 @@ import {
   RestartAlt as ResetIcon,
   Info as InfoIcon,
   ExpandMore as ExpandMoreIcon,
-  Warning as WarningIcon
+  Warning as WarningIcon,
+  Home as HomeIcon
 } from '@mui/icons-material';
 import { apiService } from '../../services/apiService';
+import { formatDateTimeWithTimezone, formatTimeWithTimezone, getTimezoneFromLocation } from '../../utils/timezone';
 
 interface WeatherLocationConfig {
   location_type: 'city' | 'coordinates';
@@ -77,6 +79,15 @@ interface AlertConfiguration {
     sustained_deficit_minutes: number;
     prediction_horizon_hours: number;
     deficit_severity_multiplier: number;
+  };
+  consumption_thresholds: {
+    critical_threshold_kw: number;
+    high_threshold_kw: number;
+    low_threshold_kw: number;
+    sustained_consumption_minutes: number;
+    start_time: string;
+    end_time: string;
+    enabled: boolean;
   };
   daylight_config: {
     latitude: number;
@@ -128,6 +139,14 @@ export const Settings: React.FC = () => {
   const [alertConfigurations, setAlertConfigurations] = useState<AlertConfiguration[]>([]);
   const [selectedAlertConfig, setSelectedAlertConfig] = useState<AlertConfiguration | null>(null);
   
+  // Weather API tracking state
+  const [weatherApiCalls, setWeatherApiCalls] = useState({
+    today: 0,
+    this_month: 0,
+    total: 0,
+    last_reset: ''
+  });
+  
   // Test & Monitoring State
   const [batteryConfig, setBatteryConfig] = useState({
     min_level_threshold: 30,
@@ -141,6 +160,7 @@ export const Settings: React.FC = () => {
     loadSettings();
     loadAlertConfigurations();
     loadBatteryConfiguration();
+    loadWeatherApiStats();
   }, []);
 
   const loadSettings = async () => {
@@ -157,12 +177,66 @@ export const Settings: React.FC = () => {
         console.warn('Could not load weather location settings');
       }
 
-      // Load other settings (you can extend this as needed)
+      // Load dashboard settings from localStorage
+      try {
+        const savedDashboardSettings = localStorage.getItem('dashboard_settings');
+        if (savedDashboardSettings) {
+          const settings = JSON.parse(savedDashboardSettings);
+          setRefreshInterval(settings.refreshInterval || 30);
+          setDarkMode(settings.darkMode || false);
+          setAutoRefresh(settings.autoRefresh !== undefined ? settings.autoRefresh : true);
+        }
+      } catch (err) {
+        console.warn('Could not load dashboard settings from localStorage');
+      }
+
+      // Load notification settings from localStorage
+      try {
+        const savedNotificationSettings = localStorage.getItem('notification_settings');
+        if (savedNotificationSettings) {
+          const settings = JSON.parse(savedNotificationSettings);
+          setEnableAlerts(settings.enableAlerts !== undefined ? settings.enableAlerts : true);
+          setWeatherNotifications(settings.weatherNotifications !== undefined ? settings.weatherNotifications : true);
+          setEmailNotifications(settings.emailNotifications !== undefined ? settings.emailNotifications : false);
+          setSmsNotifications(settings.smsNotifications !== undefined ? settings.smsNotifications : false);
+          setPushNotifications(settings.pushNotifications !== undefined ? settings.pushNotifications : true);
+        }
+      } catch (err) {
+        console.warn('Could not load notification settings from localStorage');
+      }
       
     } catch (err: any) {
       setError(`Failed to load settings: ${err.message}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadWeatherApiStats = async () => {
+    try {
+      const token = localStorage.getItem('auth_token');
+      if (!token) {
+        console.warn('No auth token available for loading weather API stats');
+        return;
+      }
+      
+      const response = await fetch('/api/weather/api-stats', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (response.ok) {
+        const stats = await response.json();
+        setWeatherApiCalls({
+          today: stats.calls_today || 0,
+          this_month: stats.calls_this_month || 0,
+          total: stats.total_calls || 0,
+          last_reset: stats.last_reset || 'Never'
+        });
+      }
+    } catch (err: any) {
+      console.error('Failed to load weather API stats:', err);
     }
   };
 
@@ -195,6 +269,7 @@ export const Settings: React.FC = () => {
   };
 
   const setDefaultAlertConfiguration = () => {
+    const timezone = getTimezoneFromLocation(weatherLocation);
     const defaultConfig: AlertConfiguration = {
       user_id: 'default',
       alert_type: 'energy_deficit',
@@ -211,10 +286,19 @@ export const Settings: React.FC = () => {
         prediction_horizon_hours: 4,
         deficit_severity_multiplier: 1.5
       },
+      consumption_thresholds: {
+        critical_threshold_kw: 1.0,
+        high_threshold_kw: 0.8,
+        low_threshold_kw: 0.7,
+        sustained_consumption_minutes: 20,
+        start_time: '18:00',
+        end_time: '03:00',
+        enabled: true
+      },
       daylight_config: {
         latitude: -33.9249,
         longitude: 18.4241,
-        timezone: 'Africa/Johannesburg',
+        timezone: timezone,
         daylight_buffer_minutes: 30,
         use_civil_twilight: true
       },
@@ -267,9 +351,14 @@ export const Settings: React.FC = () => {
 
       if (weatherLocation.location_type === 'city') {
         payload.city = weatherLocation.city?.trim() || '';
+        // Explicitly set coordinates to null when using city
+        payload.latitude = null;
+        payload.longitude = null;
       } else {
         payload.latitude = weatherLocation.latitude;
         payload.longitude = weatherLocation.longitude;
+        // Explicitly set city to null when using coordinates
+        payload.city = null;
       }
 
       console.log('Sending weather location payload:', payload);
@@ -308,8 +397,8 @@ export const Settings: React.FC = () => {
       navigator.geolocation.getCurrentPosition(
         (position) => {
           setWeatherLocation({
-            ...weatherLocation,
             location_type: 'coordinates',
+            city: undefined,
             latitude: position.coords.latitude,
             longitude: position.coords.longitude
           });
@@ -320,6 +409,50 @@ export const Settings: React.FC = () => {
       );
     } else {
       setError('Geolocation is not supported by this browser');
+    }
+  };
+
+  const saveDashboardSettings = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Dashboard settings would typically be saved to localStorage or an API
+      // For now, we'll just simulate saving and show success
+      localStorage.setItem('dashboard_settings', JSON.stringify({
+        refreshInterval,
+        darkMode,
+        autoRefresh
+      }));
+      
+      setSuccess('Dashboard settings saved successfully!');
+    } catch (err: any) {
+      setError(`Failed to save dashboard settings: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveNotificationSettings = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Save notification preferences to localStorage or API
+      // For now, we'll simulate saving and show success
+      localStorage.setItem('notification_settings', JSON.stringify({
+        enableAlerts,
+        weatherNotifications,
+        emailNotifications,
+        smsNotifications,
+        pushNotifications
+      }));
+      
+      setSuccess('Notification settings saved successfully!');
+    } catch (err: any) {
+      setError(`Failed to save notification settings: ${err.message}`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -559,7 +692,7 @@ export const Settings: React.FC = () => {
               <Button 
                 variant="contained" 
                 color="primary" 
-                onClick={saveAllSettings}
+                onClick={saveDashboardSettings}
                 disabled={loading}
                 startIcon={loading ? <CircularProgress size={20} /> : <SaveIcon />}
               >
@@ -596,10 +729,24 @@ export const Settings: React.FC = () => {
               <FormLabel component="legend">Location Type</FormLabel>
               <RadioGroup
                 value={weatherLocation.location_type}
-                onChange={(e) => setWeatherLocation({
-                  ...weatherLocation, 
-                  location_type: e.target.value as 'city' | 'coordinates'
-                })}
+                onChange={(e) => {
+                  const newLocationType = e.target.value as 'city' | 'coordinates';
+                  if (newLocationType === 'city') {
+                    setWeatherLocation({
+                      location_type: 'city',
+                      city: weatherLocation.city || '',
+                      latitude: undefined,
+                      longitude: undefined
+                    });
+                  } else {
+                    setWeatherLocation({
+                      location_type: 'coordinates',
+                      city: undefined,
+                      latitude: weatherLocation.latitude,
+                      longitude: weatherLocation.longitude
+                    });
+                  }
+                }}
               >
                 <FormControlLabel 
                   value="city" 
@@ -688,6 +835,66 @@ export const Settings: React.FC = () => {
                 Save Weather Location
               </Button>
             </Box>
+
+            {/* Weather API Usage Widget */}
+            <Card sx={{ mt: 4 }}>
+              <CardHeader 
+                title="Weather API Usage" 
+                avatar={<CloudIcon color="primary" />}
+                action={
+                  <IconButton onClick={loadWeatherApiStats} size="small">
+                    <RefreshIcon />
+                  </IconButton>
+                }
+              />
+              <CardContent>
+                <Grid container spacing={3}>
+                  <Grid item xs={12} md={4}>
+                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'info.light', borderRadius: 2 }}>
+                      <Typography variant="h4" color="info.main" sx={{ fontWeight: 'bold' }}>
+                        {weatherApiCalls.today}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        API Calls Today
+                      </Typography>
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'warning.light', borderRadius: 2 }}>
+                      <Typography variant="h4" color="warning.main" sx={{ fontWeight: 'bold' }}>
+                        {weatherApiCalls.this_month}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        This Month
+                      </Typography>
+                    </Box>
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <Box sx={{ textAlign: 'center', p: 2, bgcolor: 'success.light', borderRadius: 2 }}>
+                      <Typography variant="h4" color="success.main" sx={{ fontWeight: 'bold' }}>
+                        {weatherApiCalls.total}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        Total Calls
+                      </Typography>
+                    </Box>
+                  </Grid>
+                </Grid>
+                <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    <strong>OpenWeather API Limit:</strong> Free tier allows 1,000 calls/month (33 calls/day average)
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    <strong>Last Reset:</strong> {weatherApiCalls.last_reset && weatherApiCalls.last_reset !== 'Never' 
+                      ? formatDateTimeWithTimezone(weatherApiCalls.last_reset, {}, weatherLocation) 
+                      : weatherApiCalls.last_reset || 'Never'}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    <strong>Current Usage:</strong> {weatherApiCalls.this_month > 0 ? ((weatherApiCalls.this_month / 1000) * 100).toFixed(1) : 0}% of monthly limit
+                  </Typography>
+                </Box>
+              </CardContent>
+            </Card>
           </Box>
         )}
 
@@ -815,6 +1022,105 @@ export const Settings: React.FC = () => {
                   </AccordionDetails>
                 </Accordion>
 
+                {/* Consumption Thresholds */}
+                <Accordion expanded={expandedPanel === 'consumption'} onChange={handlePanelChange('consumption')}>
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Box display="flex" alignItems="center">
+                      <HomeIcon sx={{ mr: 1 }} />
+                      <Typography variant="h6">Consumption Thresholds</Typography>
+                    </Box>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    <Grid container spacing={3}>
+                      <Grid item xs={12}>
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={selectedAlertConfig.consumption_thresholds.enabled}
+                              onChange={(e) => updateSelectedAlertConfig('consumption_thresholds.enabled', e.target.checked)}
+                            />
+                          }
+                          label="Enable Consumption Alerts"
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={4}>
+                        <TextField
+                          fullWidth
+                          label="Critical Threshold (kW)"
+                          type="number"
+                          value={selectedAlertConfig.consumption_thresholds.critical_threshold_kw}
+                          onChange={(e) => updateSelectedAlertConfig('consumption_thresholds.critical_threshold_kw', Number(e.target.value))}
+                          inputProps={{ min: 0.1, max: 10, step: 0.1 }}
+                          helperText="Alert when consumption exceeds this for sustained period"
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={4}>
+                        <TextField
+                          fullWidth
+                          label="High Threshold (kW)"
+                          type="number"
+                          value={selectedAlertConfig.consumption_thresholds.high_threshold_kw}
+                          onChange={(e) => updateSelectedAlertConfig('consumption_thresholds.high_threshold_kw', Number(e.target.value))}
+                          inputProps={{ min: 0.1, max: 10, step: 0.1 }}
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={4}>
+                        <TextField
+                          fullWidth
+                          label="Low Threshold (kW)"
+                          type="number"
+                          value={selectedAlertConfig.consumption_thresholds.low_threshold_kw}
+                          onChange={(e) => updateSelectedAlertConfig('consumption_thresholds.low_threshold_kw', Number(e.target.value))}
+                          inputProps={{ min: 0.1, max: 10, step: 0.1 }}
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={4}>
+                        <TextField
+                          fullWidth
+                          label="Sustained Period (minutes)"
+                          type="number"
+                          value={selectedAlertConfig.consumption_thresholds.sustained_consumption_minutes}
+                          onChange={(e) => updateSelectedAlertConfig('consumption_thresholds.sustained_consumption_minutes', Number(e.target.value))}
+                          inputProps={{ min: 5, max: 120 }}
+                          helperText="Alert after consumption exceeds threshold for this duration"
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={4}>
+                        <TextField
+                          fullWidth
+                          label="Alert Start Time"
+                          type="time"
+                          value={selectedAlertConfig.consumption_thresholds.start_time}
+                          onChange={(e) => updateSelectedAlertConfig('consumption_thresholds.start_time', e.target.value)}
+                          helperText="Start of consumption monitoring period"
+                          InputLabelProps={{ shrink: true }}
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={4}>
+                        <TextField
+                          fullWidth
+                          label="Alert End Time"
+                          type="time"
+                          value={selectedAlertConfig.consumption_thresholds.end_time}
+                          onChange={(e) => updateSelectedAlertConfig('consumption_thresholds.end_time', e.target.value)}
+                          helperText="End of consumption monitoring period"
+                          InputLabelProps={{ shrink: true }}
+                        />
+                      </Grid>
+                    </Grid>
+                    <Alert severity="info" sx={{ mt: 2 }}>
+                      <Typography variant="body2">
+                        <strong>Consumption Alert Settings:</strong><br/>
+                        • Critical: {selectedAlertConfig.consumption_thresholds.critical_threshold_kw}kW (Critical alerts)<br/>
+                        • High: {selectedAlertConfig.consumption_thresholds.high_threshold_kw}kW (High priority alerts)<br/>
+                        • Low: {selectedAlertConfig.consumption_thresholds.low_threshold_kw}kW (Low priority alerts)<br/>
+                        • Active between {selectedAlertConfig.consumption_thresholds.start_time} - {selectedAlertConfig.consumption_thresholds.end_time}<br/>
+                        • Triggers after {selectedAlertConfig.consumption_thresholds.sustained_consumption_minutes} minutes of sustained high consumption
+                      </Typography>
+                    </Alert>
+                  </AccordionDetails>
+                </Accordion>
+
                 {/* Intelligence Settings */}
                 <Accordion expanded={expandedPanel === 'intelligence'} onChange={handlePanelChange('intelligence')}>
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
@@ -880,127 +1186,8 @@ export const Settings: React.FC = () => {
               </Box>
             )}
 
-            {/* Battery Thresholds Card */}
+            {/* Test Alerts Card */}
             <Grid container spacing={3} sx={{ mt: 2 }}>
-              <Grid item xs={12}>
-                <Card>
-                  <CardHeader 
-                    title="Battery Alert Thresholds" 
-                    avatar={<BatteryIcon color="primary" />}
-                  />
-                  <CardContent>
-                    <Grid container spacing={3}>
-                      <Grid item xs={12} md={6}>
-                        <Stack spacing={3}>
-                          <Box>
-                            <Typography gutterBottom>
-                              Battery Alert Level: {batteryConfig.min_level_threshold}%
-                            </Typography>
-                            <Slider
-                              value={batteryConfig.min_level_threshold}
-                              onChange={(_, value) => setBatteryConfig(prev => ({
-                                ...prev,
-                                min_level_threshold: value as number
-                              }))}
-                              min={10}
-                              max={80}
-                              valueLabelDisplay="auto"
-                              marks={[
-                                { value: 20, label: '20%' },
-                                { value: 30, label: '30%' },
-                                { value: 40, label: '40%' },
-                                { value: 50, label: '50%' }
-                              ]}
-                              sx={{ mt: 2 }}
-                            />
-                            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                              Alert when battery drops below this level
-                            </Typography>
-                          </Box>
-
-                          <Box>
-                            <Typography gutterBottom>
-                              Critical Battery Level: {batteryConfig.critical_level}%
-                            </Typography>
-                            <Slider
-                              value={batteryConfig.critical_level}
-                              onChange={(_, value) => setBatteryConfig(prev => ({
-                                ...prev,
-                                critical_level: value as number
-                              }))}
-                              min={5}
-                              max={30}
-                              valueLabelDisplay="auto"
-                              marks={[
-                                { value: 10, label: '10%' },
-                                { value: 15, label: '15%' },
-                                { value: 20, label: '20%' }
-                              ]}
-                              sx={{ mt: 2 }}
-                            />
-                            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                              Emergency alerts for critically low battery
-                            </Typography>
-                          </Box>
-                        </Stack>
-                      </Grid>
-
-                      <Grid item xs={12} md={6}>
-                        <Stack spacing={3}>
-                          <Box>
-                            <Typography gutterBottom>
-                              Battery Loss Alert: {batteryConfig.max_loss_threshold}% in {batteryConfig.loss_timeframe_minutes} min
-                            </Typography>
-                            <Slider
-                              value={batteryConfig.max_loss_threshold}
-                              onChange={(_, value) => setBatteryConfig(prev => ({
-                                ...prev,
-                                max_loss_threshold: value as number
-                              }))}
-                              min={5}
-                              max={30}
-                              valueLabelDisplay="auto"
-                              marks={[
-                                { value: 10, label: '10%' },
-                                { value: 15, label: '15%' },
-                                { value: 20, label: '20%' }
-                              ]}
-                              sx={{ mt: 2 }}
-                            />
-                            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                              Alert when battery loses this percentage rapidly
-                            </Typography>
-                          </Box>
-
-                          <TextField
-                            fullWidth
-                            type="number"
-                            label="Loss Timeframe (minutes)"
-                            value={batteryConfig.loss_timeframe_minutes}
-                            onChange={(e) => setBatteryConfig(prev => ({
-                              ...prev,
-                              loss_timeframe_minutes: parseInt(e.target.value) || 60
-                            }))}
-                            inputProps={{ min: 15, max: 240 }}
-                            helperText="Time window for detecting rapid battery loss"
-                          />
-
-                          <Button
-                            variant="outlined"
-                            onClick={saveBatteryConfiguration}
-                            disabled={savingBatteryConfig}
-                            startIcon={savingBatteryConfig ? <CircularProgress size={20} /> : <SaveIcon />}
-                          >
-                            {savingBatteryConfig ? 'Saving...' : 'Save Battery Settings'}
-                          </Button>
-                        </Stack>
-                      </Grid>
-                    </Grid>
-                  </CardContent>
-                </Card>
-              </Grid>
-
-              {/* Test Alerts Card */}
               <Grid item xs={12} md={6}>
                 <Card>
                   <CardHeader title="Test Alerts" avatar={<SecurityIcon color="primary" />} />
@@ -1176,7 +1363,7 @@ export const Settings: React.FC = () => {
               <Button 
                 variant="contained" 
                 color="primary" 
-                onClick={saveAllSettings}
+                onClick={saveNotificationSettings}
                 disabled={loading}
                 startIcon={loading ? <CircularProgress size={20} /> : <SaveIcon />}
               >
@@ -1233,7 +1420,7 @@ export const Settings: React.FC = () => {
                           <Box display="flex" justifyContent="space-between" alignItems="center">
                             <Typography>Last Check:</Typography>
                             <Typography variant="body2" color="text.secondary">
-                              {new Date().toLocaleTimeString()}
+                              {formatTimeWithTimezone(new Date(), weatherLocation)}
                             </Typography>
                           </Box>
                         </Stack>

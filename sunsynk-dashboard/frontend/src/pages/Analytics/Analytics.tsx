@@ -34,6 +34,7 @@ import {
 } from '@mui/icons-material';
 import { apiService } from '../../services/apiService';
 import { formatPower } from '../../utils/powerUtils';
+import { formatDateWithTimezone } from '../../utils/timezone';
 
 interface WeatherCorrelation {
   correlation_coefficient: number;
@@ -193,9 +194,11 @@ const Analytics: React.FC = () => {
     else if (activeTab === 1) loadConsumptionAnalysis();
     else if (activeTab === 2) {
       loadBatteryOptimization();
+    }
+    else if (activeTab === 3) {
+      loadBatteryOptimization();
       loadSolarValueAnalysis();
     }
-    else if (activeTab === 3) loadBatteryOptimization();
     else if (activeTab === 4) loadEnergyForecasting();
   }, [activeTab]);
 
@@ -424,7 +427,7 @@ const Analytics: React.FC = () => {
                       {anomalies.map((anomaly, index) => (
                         <ListItem key={index} divider>
                           <ListItemText
-                            primary={new Date(anomaly.timestamp).toLocaleDateString()}
+                            primary={formatDateWithTimezone(anomaly.timestamp)}
                             secondary={`${anomaly.deviation.toFixed(1)}% deviation`}
                           />
                           <Chip 
@@ -523,6 +526,15 @@ const Analytics: React.FC = () => {
 
 
 
+
+          </Grid>
+        </Box>
+      )}
+
+      {/* Cost Savings Tab */}
+      {activeTab === 3 && !loading && (
+        <Box>
+          <Grid container spacing={3}>
             {/* Solar Energy Value Widget */}
             <Grid item xs={12}>
               <Card>
@@ -674,14 +686,6 @@ const Analytics: React.FC = () => {
                 </CardContent>
               </Card>
             </Grid>
-          </Grid>
-        </Box>
-      )}
-
-      {/* Cost Savings Tab */}
-      {activeTab === 3 && !loading && (
-        <Box>
-          <Grid container spacing={3}>
             <Grid item xs={12} md={8}>
               <Card>
                 <CardHeader 

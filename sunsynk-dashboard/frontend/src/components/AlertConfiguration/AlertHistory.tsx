@@ -42,6 +42,7 @@ import {
   Download as DownloadIcon,
   Visibility as ViewIcon
 } from '@mui/icons-material';
+import { formatDateTimeWithTimezone } from '../../utils/timezone';
 import { apiService } from '../../services/apiService';
 
 interface AlertHistoryItem {
@@ -173,7 +174,7 @@ const AlertHistory: React.FC = () => {
   };
 
   const formatDateTime = (dateString: string) => {
-    return new Date(dateString).toLocaleString();
+    return formatDateTimeWithTimezone(dateString);
   };
 
   return (

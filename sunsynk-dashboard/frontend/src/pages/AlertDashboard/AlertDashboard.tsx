@@ -65,6 +65,7 @@ import {
   VisibilityOff as VisibilityOffIcon,
   Save as SaveIcon
 } from '@mui/icons-material';
+import { formatDateTimeWithTimezone } from '../../utils/timezone';
 import { apiService } from '../../services/apiService';
 
 interface AlertSummary {
@@ -464,7 +465,7 @@ const AlertDashboard: React.FC = () => {
   };
 
   const formatTimestamp = (timestamp: string) => {
-    return new Date(timestamp).toLocaleString();
+    return formatDateTimeWithTimezone(timestamp);
   };
 
   const getUniqueCategories = () => {

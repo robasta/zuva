@@ -1709,56 +1709,7 @@ async def get_all_user_settings(user: dict = Depends(verify_token)):
     settings = await settings_manager.get_user_settings(user_id)
     return {"user_id": user_id, "settings": settings}
 
-@app.get("/api/settings/{category}/{key}")
-async def get_setting(
-    category: str,
-    key: str,
-    user: dict = Depends(verify_token)
-):
-    """Get a specific setting value"""
-    if not SETTINGS_MANAGER_AVAILABLE:
-        raise HTTPException(status_code=503, detail="Settings manager not available")
-    
-    user_id = user.get("sub")
-    value = await settings_manager.get_setting(key, user_id)
-    
-    if value is None:
-        raise HTTPException(status_code=404, detail="Setting not found")
-    
-    return {"key": key, "value": value, "category": category}
-
-@app.put("/api/settings/{category}/{key}")
-async def set_setting(
-    category: str,
-    key: str,
-    request: dict,
-    user: dict = Depends(verify_token)
-):
-    """Set a setting value for the current user"""
-    if not SETTINGS_MANAGER_AVAILABLE:
-        raise HTTPException(status_code=503, detail="Settings manager not available")
-    
-    if "value" not in request:
-        raise HTTPException(status_code=400, detail="Value is required")
-    
-    user_id = user.get("sub")
-    value = request["value"]
-    description = request.get("description")
-    
-    success = await settings_manager.set_setting(
-        key=key,
-        value=value,
-        category=category,
-        user_id=user_id,
-        description=description
-    )
-    
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to save setting")
-    
-    return {"message": "Setting saved successfully", "key": key, "value": value}
-
-# Weather Location Configuration Endpoints
+# Weather Location Configuration Endpoints (must be before generic routes)
 @app.get("/api/settings/weather/location")
 async def get_weather_location(user: dict = Depends(verify_token)):
     """Get current weather location configuration"""
@@ -1850,6 +1801,55 @@ async def set_weather_location(
             raise HTTPException(status_code=400, detail="Invalid latitude or longitude format")
     
     return {"success": True, "message": "Weather location configuration saved successfully"}
+
+@app.get("/api/settings/{category}/{key}")
+async def get_setting(
+    category: str,
+    key: str,
+    user: dict = Depends(verify_token)
+):
+    """Get a specific setting value"""
+    if not SETTINGS_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Settings manager not available")
+    
+    user_id = user.get("sub")
+    value = await settings_manager.get_setting(key, user_id)
+    
+    if value is None:
+        raise HTTPException(status_code=404, detail="Setting not found")
+    
+    return {"key": key, "value": value, "category": category}
+
+@app.put("/api/settings/{category}/{key}")
+async def set_setting(
+    category: str,
+    key: str,
+    request: dict,
+    user: dict = Depends(verify_token)
+):
+    """Set a setting value for the current user"""
+    if not SETTINGS_MANAGER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Settings manager not available")
+    
+    if "value" not in request:
+        raise HTTPException(status_code=400, detail="Value is required")
+    
+    user_id = user.get("sub")
+    value = request["value"]
+    description = request.get("description")
+    
+    success = await settings_manager.set_setting(
+        key=key,
+        value=value,
+        category=category,
+        user_id=user_id,
+        description=description
+    )
+    
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save setting")
+    
+    return {"message": "Setting saved successfully", "key": key, "value": value}
 
 @app.get("/api/weather/test-location")
 async def test_weather_location(user: dict = Depends(verify_token)):
