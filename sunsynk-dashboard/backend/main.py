@@ -620,6 +620,70 @@ class AlertManager:
             enabled_channels=[NotificationChannel.PUSH, NotificationChannel.EMAIL]
         )
         
+        # Database connection for alert persistence
+        from collector.database import db_manager, AlertData
+        self.db_manager = db_manager
+        self.AlertData = AlertData
+        
+        # Initialize Intelligent Alert System
+        self.intelligent_monitor = None
+        self.monitoring_task = None
+        if INTELLIGENT_ALERTS_AVAILABLE:
+            self.intelligent_monitor = IntelligentAlertMonitor()
+            logger.info("Intelligent Alert System initialized")
+    
+    async def initialize(self):
+        """Initialize alert manager and load existing alerts from database."""
+        try:
+            # Load active alerts from database
+            if hasattr(self.db_manager, 'get_active_alerts'):
+                active_alerts_data = await self.db_manager.get_active_alerts()
+                
+                for alert_data in active_alerts_data:
+                    alert = Alert(
+                        id=alert_data['id'],
+                        title=alert_data['title'],
+                        message=alert_data['message'],
+                        severity=AlertSeverity(alert_data['severity']),
+                        status=AlertStatus(alert_data['status']),
+                        category=alert_data['category'],
+                        timestamp=datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00')),
+                        acknowledged_at=datetime.fromisoformat(alert_data['acknowledged_at'].replace('Z', '+00:00')) if alert_data.get('acknowledged_at') else None,
+                        resolved_at=datetime.fromisoformat(alert_data['resolved_at'].replace('Z', '+00:00')) if alert_data.get('resolved_at') else None,
+                        metadata=alert_data.get('metadata', {})
+                    )
+                    self.active_alerts[alert.id] = alert
+                
+                logger.info(f"Loaded {len(self.active_alerts)} active alerts from database")
+            else:
+                logger.warning("Database manager does not support alert storage")
+        except Exception as e:
+            logger.error(f"Failed to initialize alert manager from database: {e}")
+    
+    async def save_alert_to_db(self, alert: Alert) -> bool:
+        """Save alert to database."""
+        try:
+            if not hasattr(self.db_manager, 'write_alert'):
+                return False
+                
+            alert_data = self.AlertData(
+                timestamp=alert.timestamp,
+                alert_id=alert.id,
+                title=alert.title,
+                message=alert.message,
+                severity=alert.severity.value,
+                status=alert.status.value,
+                category=alert.category,
+                acknowledged_at=alert.acknowledged_at,
+                resolved_at=alert.resolved_at,
+                metadata=alert.metadata
+            )
+            
+            return await self.db_manager.write_alert(alert_data)
+        except Exception as e:
+            logger.error(f"Failed to save alert to database: {e}")
+            return False
+        
         # Initialize Intelligent Alert System
         self.intelligent_monitor = None
         self.monitoring_task = None
@@ -721,6 +785,9 @@ class AlertManager:
         self.active_alerts[alert_id] = alert
         self.alert_history.append(alert)
         
+        # Save to database
+        asyncio.create_task(self.save_alert_to_db(alert))
+        
         # Trigger notifications
         asyncio.create_task(self._send_notifications(alert))
         
@@ -731,6 +798,15 @@ class AlertManager:
         if alert_id in self.active_alerts:
             self.active_alerts[alert_id].status = AlertStatus.ACKNOWLEDGED
             self.active_alerts[alert_id].acknowledged_at = datetime.now()
+            
+            # Update in database
+            asyncio.create_task(self.db_manager.update_alert_status(
+                alert_id, "acknowledged", datetime.now()
+            ))
+            
+            # Save updated alert to database
+            asyncio.create_task(self.save_alert_to_db(self.active_alerts[alert_id]))
+            
             logger.info(f"✅ Alert acknowledged: {alert_id}")
             return True
         return False
@@ -740,6 +816,15 @@ class AlertManager:
             alert = self.active_alerts[alert_id]
             alert.status = AlertStatus.RESOLVED
             alert.resolved_at = datetime.now()
+            
+            # Update in database
+            asyncio.create_task(self.db_manager.update_alert_status(
+                alert_id, "resolved", datetime.now()
+            ))
+            
+            # Save updated alert to database
+            asyncio.create_task(self.save_alert_to_db(alert))
+            
             del self.active_alerts[alert_id]
             logger.info(f"✅ Alert resolved: {alert_id}")
             return True
@@ -752,44 +837,54 @@ class AlertManager:
         cutoff = datetime.now() - timedelta(hours=hours)
         return [alert for alert in self.alert_history if alert.timestamp >= cutoff]
     
-    def get_recent_alerts(self, hours: int = 24) -> List[dict]:
-        """Get recent alerts as dictionaries for API responses"""
-        cutoff = datetime.now() - timedelta(hours=hours)
-        recent_alerts = []
-        
-        # Include active alerts
-        for alert in self.active_alerts.values():
-            if alert.timestamp >= cutoff:
-                recent_alerts.append({
-                    'id': alert.id,
-                    'title': alert.title,
-                    'message': alert.message,
-                    'severity': alert.severity.value,
-                    'status': 'active',
-                    'category': alert.category,
-                    'timestamp': alert.timestamp.isoformat(),
-                    'metadata': alert.metadata
-                })
-        
-        # Include historical alerts
-        for alert in self.alert_history:
-            if alert.timestamp >= cutoff:
-                recent_alerts.append({
-                    'id': alert.id,
-                    'title': alert.title,
-                    'message': alert.message,
-                    'severity': alert.severity.value,
-                    'status': alert.status.value,
-                    'category': alert.category,
-                    'timestamp': alert.timestamp.isoformat(),
-                    'acknowledged_at': alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
-                    'resolved_at': alert.resolved_at.isoformat() if alert.resolved_at else None,
-                    'metadata': alert.metadata
-                })
-        
-        # Sort by timestamp (most recent first)
-        recent_alerts.sort(key=lambda x: x['timestamp'], reverse=True)
-        return recent_alerts
+    async def get_recent_alerts(self, hours: int = 24) -> List[dict]:
+        """Get recent alerts from database and in-memory cache."""
+        try:
+            # Get alerts from database
+            if hasattr(self.db_manager, 'get_alerts'):
+                db_alerts = await self.db_manager.get_alerts(hours=hours)
+                return db_alerts
+            else:
+                # Fallback to in-memory alerts
+                cutoff = datetime.now() - timedelta(hours=hours)
+                recent_alerts = []
+                
+                # Include active alerts
+                for alert in self.active_alerts.values():
+                    if alert.timestamp >= cutoff:
+                        recent_alerts.append({
+                            'id': alert.id,
+                            'title': alert.title,
+                            'message': alert.message,
+                            'severity': alert.severity.value,
+                            'status': 'active',
+                            'category': alert.category,
+                            'timestamp': alert.timestamp.isoformat(),
+                            'metadata': alert.metadata
+                        })
+                
+                # Include historical alerts
+                for alert in self.alert_history:
+                    if alert.timestamp >= cutoff:
+                        recent_alerts.append({
+                            'id': alert.id,
+                            'title': alert.title,
+                            'message': alert.message,
+                            'severity': alert.severity.value,
+                            'status': alert.status.value,
+                            'category': alert.category,
+                            'timestamp': alert.timestamp.isoformat(),
+                            'acknowledged_at': alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
+                            'resolved_at': alert.resolved_at.isoformat() if alert.resolved_at else None,
+                            'metadata': alert.metadata
+                        })
+                
+                # Sort by timestamp (most recent first)
+                recent_alerts.sort(key=lambda x: x['timestamp'], reverse=True)
+                return recent_alerts
+        except Exception as e:
+            logger.error(f"Error getting recent alerts: {e}")
+            return []
     
     async def _send_notifications(self, alert: Alert):
         try:
@@ -990,6 +1085,12 @@ class SystemMonitor:
             )
 
 alert_manager = AlertManager()
+
+# Initialize alert manager with database
+async def initialize_alert_manager():
+    """Initialize alert manager on startup."""
+    await alert_manager.initialize()
+
 system_monitor = SystemMonitor(alert_manager)
 
 # Background Tasks
@@ -1393,6 +1494,102 @@ async def get_dashboard_history(
         })
     
     return {"history": history, "source": "generated"}
+
+@app.get("/api/dashboard/timeseries")
+async def get_dashboard_timeseries(
+    start_time: str = "-24h",
+    resolution: str = "5m",
+    user: dict = Depends(verify_token)
+):
+    """Get time series data for dashboard graphs."""
+    logger.info(f"📈 Fetching timeseries data - Start: {start_time}, Resolution: {resolution}")
+    
+    try:
+        # Try to get data from database
+        from collector.database import db_manager
+        timeseries_data = await db_manager.get_timeseries_data(start_time, resolution)
+        
+        if timeseries_data and len(timeseries_data) > 0:
+            logger.info(f"✅ Retrieved {len(timeseries_data)} real timeseries data points")
+            return {
+                "success": True,
+                "data": timeseries_data,
+                "source": "database",
+                "count": len(timeseries_data)
+            }
+        else:
+            logger.warning("⚠️ No database timeseries data, generating fallback data")
+            
+    except Exception as e:
+        logger.error(f"❌ Failed to query database timeseries: {e}")
+    
+    # Generate fallback data
+    try:
+        import random
+        import math
+        from datetime import datetime, timedelta, timezone
+        
+        # Parse start_time
+        if start_time.startswith("-"):
+            hours = int(start_time[1:-1]) if start_time.endswith("h") else 24
+            start_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
+        else:
+            start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+        
+        # Parse resolution 
+        if resolution.endswith("m"):
+            minutes = int(resolution[:-1])
+        elif resolution.endswith("h"):
+            minutes = int(resolution[:-1]) * 60
+        else:
+            minutes = 5  # Default
+        
+        # Generate data points
+        end_dt = datetime.now(timezone.utc)
+        current_dt = start_dt
+        data_points = []
+        
+        while current_dt <= end_dt:
+            hour = current_dt.hour
+            
+            # Solar generation (daylight hours)
+            if 6 <= hour <= 18:
+                solar_factor = math.sin(math.pi * (hour - 6) / 12)
+                generation = max(0, 4.5 * solar_factor + random.uniform(-0.5, 0.5))
+            else:
+                generation = 0.0
+            
+            # Battery SOC (realistic pattern)
+            battery_base = 50 + 25 * math.sin(math.pi * (hour - 3) / 12)
+            battery_soc = max(15, min(95, battery_base + random.uniform(-5, 5)))
+            
+            # Consumption (higher in morning/evening)
+            if 6 <= hour <= 9 or 17 <= hour <= 22:
+                consumption = 2.5 + random.uniform(-0.3, 0.8)
+            else:
+                consumption = 1.2 + random.uniform(-0.2, 0.5)
+            
+            data_points.append({
+                "timestamp": current_dt.isoformat(),
+                "generation": round(generation, 2),
+                "consumption": round(consumption, 2),
+                "battery_soc": round(battery_soc, 1),
+                "battery_level": round(battery_soc, 1)  # Alias for compatibility
+            })
+            
+            current_dt += timedelta(minutes=minutes)
+        
+        logger.info(f"✅ Generated {len(data_points)} fallback timeseries data points")
+        return {
+            "success": True,
+            "data": data_points,
+            "source": "generated",
+            "count": len(data_points)
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to generate fallback timeseries data: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve timeseries data")
 
 # Phase 6 ML Analytics Endpoints
 @app.get("/api/v6/weather/correlation")
@@ -2083,20 +2280,26 @@ async def get_alerts(
     user: dict = Depends(verify_token)
 ):
     """Get alerts with optional filtering"""
-    if status == "active":
-        alerts = alert_manager.get_active_alerts()
-    else:
-        alerts = alert_manager.get_alert_history(hours)
-    
-    # Filter by severity if specified
-    if severity:
-        alerts = [alert for alert in alerts if alert.severity.value == severity]
-    
-    return {
-        "alerts": [alert.model_dump() for alert in alerts],
-        "total": len(alerts),
-        "active_count": len(alert_manager.get_active_alerts())
-    }
+    try:
+        # Get alerts from database
+        alerts = await alert_manager.get_recent_alerts(hours)
+        
+        # Filter by status if specified
+        if status:
+            alerts = [alert for alert in alerts if alert.get("status") == status]
+        
+        # Filter by severity if specified
+        if severity:
+            alerts = [alert for alert in alerts if alert.get("severity") == severity]
+        
+        return {
+            "alerts": alerts,
+            "total": len(alerts),
+            "active_count": len([a for a in alerts if a.get("status") == "active"])
+        }
+    except Exception as e:
+        logger.error(f"Failed to get alerts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/alerts/{alert_id}/acknowledge")
 async def acknowledge_alert(alert_id: str, user: dict = Depends(verify_token)):
@@ -2706,7 +2909,7 @@ if INTELLIGENT_ALERTS_AVAILABLE:
 async def get_alert_summary():
     """Get alert summary statistics"""
     try:
-        alerts = alert_manager.get_recent_alerts(hours=24)
+        alerts = await alert_manager.get_recent_alerts(hours=24)
         
         summary = {
             "total": len(alerts),
@@ -2818,6 +3021,13 @@ async def validate_alert_configuration():
 async def startup_event():
     """Initialize services on startup"""
     logger.info("🚀 Starting Sunsynk Solar Dashboard Backend")
+    
+    # Initialize alert manager with database
+    try:
+        await initialize_alert_manager()
+        logger.info("✅ Alert Manager initialized with database persistence")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Alert Manager: {e}")
     
     # Initialize persistent settings manager
     if SETTINGS_MANAGER_AVAILABLE:

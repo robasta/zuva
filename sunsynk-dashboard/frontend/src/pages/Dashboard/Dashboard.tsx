@@ -30,7 +30,7 @@ import {
   Air,
   Visibility
 } from '@mui/icons-material';
-import { formatTimeWithTimezone, formatDateTimeWithTimezone } from '../../utils/timezone';
+} from '@mui/icons-material';\nimport { formatTimeWithTimezone, formatDateTimeWithTimezone } from '../../utils/timezone';\nimport TimeSeriesGraph from '../../components/TimeSeriesGraph/TimeSeriesGraph';
 
 const REFRESH_INTERVAL = 30000; // 30 seconds
 

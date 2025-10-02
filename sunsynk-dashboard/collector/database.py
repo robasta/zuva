@@ -89,6 +89,29 @@ class ConsumptionAnalysis:
         return asdict(self)
 
 
+@dataclass
+class AlertData:
+    """Alert data structure for database storage."""
+    timestamp: datetime
+    alert_id: str
+    title: str
+    message: str
+    severity: str  # low/medium/high/critical
+    status: str  # active/acknowledged/resolved
+    category: str
+    user_id: str = "default"
+    acknowledged_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+    metadata: Dict[str, Any] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for InfluxDB."""
+        result = asdict(self)
+        if self.metadata is None:
+            result['metadata'] = {}
+        return result
+
+
 class DatabaseManager:
     """
     Database manager for InfluxDB time-series data storage.
@@ -391,6 +414,178 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error querying consumption stats: {e}")
             return {}
+    
+    # Alert Storage Methods
+    
+    async def write_alert(self, alert: AlertData) -> bool:
+        """Write alert to database."""
+        try:
+            if not self.write_api:
+                logger.error("Database not connected")
+                return False
+            
+            point = (
+                Point("alerts")
+                .tag("alert_id", alert.alert_id)
+                .tag("severity", alert.severity)
+                .tag("status", alert.status)
+                .tag("category", alert.category)
+                .tag("user_id", alert.user_id)
+                .field("title", alert.title)
+                .field("message", alert.message)
+                .field("acknowledged_at", alert.acknowledged_at.isoformat() if alert.acknowledged_at else "")
+                .field("resolved_at", alert.resolved_at.isoformat() if alert.resolved_at else "")
+                .field("metadata", str(alert.metadata) if alert.metadata else "{}")
+                .time(alert.timestamp)
+            )
+            
+            self.write_api.write(bucket=self.bucket, record=point)
+            logger.debug(f"Alert written: {alert.alert_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error writing alert: {e}")
+            return False
+    
+    async def update_alert_status(self, alert_id: str, status: str, 
+                                timestamp: datetime = None, user_id: str = "default") -> bool:
+        """Update alert status in database."""
+        try:
+            if not self.write_api:
+                logger.error("Database not connected")
+                return False
+            
+            update_time = timestamp or datetime.now(timezone.utc)
+            
+            point = (
+                Point("alert_status_updates")
+                .tag("alert_id", alert_id)
+                .tag("user_id", user_id)
+                .field("new_status", status)
+                .field("status_change", status)
+                .time(update_time)
+            )
+            
+            self.write_api.write(bucket=self.bucket, record=point)
+            logger.debug(f"Alert status updated: {alert_id} -> {status}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating alert status: {e}")
+            return False
+    
+    async def get_alerts(self, status: str = None, hours: int = 24, 
+                        user_id: str = "default") -> List[Dict[str, Any]]:
+        """Get alerts from database."""
+        try:
+            if not self.query_api:
+                logger.error("Database not connected")
+                return []
+            
+            status_filter = f'|> filter(fn: (r) => r.status == "{status}")' if status else ''
+            
+            query = f'''
+                from(bucket: "{self.bucket}")
+                |> range(start: -{hours}h)
+                |> filter(fn: (r) => r._measurement == "alerts")
+                |> filter(fn: (r) => r.user_id == "{user_id}")
+                {status_filter}
+                |> sort(columns: ["_time"], desc: true)
+                |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+            '''
+            
+            result = self.query_api.query(query)
+            alerts = []
+            
+            for table in result:
+                for record in table.records:
+                    alert_data = {
+                        'id': record.get('alert_id'),
+                        'title': record.get('title'),
+                        'message': record.get('message'),
+                        'severity': record.get('severity'),
+                        'status': record.get('status'),
+                        'category': record.get('category'),
+                        'timestamp': record.get_time().isoformat(),
+                        'acknowledged_at': record.get('acknowledged_at') if record.get('acknowledged_at') else None,
+                        'resolved_at': record.get('resolved_at') if record.get('resolved_at') else None,
+                        'metadata': eval(record.get('metadata', '{}')) if record.get('metadata') and record.get('metadata') != '{}' else {}
+                    }
+                    alerts.append(alert_data)
+            
+            return alerts
+            
+        except Exception as e:
+            logger.error(f"Error querying alerts: {e}")
+            return []
+    
+    async def get_active_alerts(self, user_id: str = "default") -> List[Dict[str, Any]]:
+        """Get active alerts from database."""
+        return await self.get_alerts(status="active", hours=24*7, user_id=user_id)  # Last week of active alerts
+    
+    async def cleanup_old_alerts(self, retention_days: int = 90) -> bool:
+        """Clean up old resolved alerts."""
+        try:
+            if not self.client:
+                logger.error("Database not connected")
+                return False
+            
+            # Delete alerts older than retention period
+            delete_api = self.client.delete_api()
+            start = f"-{retention_days}d"
+            stop = datetime.now(timezone.utc)
+            
+            delete_api.delete(
+                start=start,
+                stop=stop,
+                predicate='_measurement="alerts" AND status="resolved"',
+                bucket=self.bucket,
+                org=self.org
+            )
+            
+            logger.info(f"Cleaned up alerts older than {retention_days} days")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up old alerts: {e}")
+            return False
+    
+    async def get_timeseries_data(self, start_time: str = "-24h", 
+                                resolution: str = "5m") -> List[Dict[str, Any]]:
+        """Get time series data for dashboard graphs."""
+        try:
+            if not self.query_api:
+                logger.error("Database not connected")
+                return []
+            
+            query = f'''
+                from(bucket: "{self.bucket}")
+                |> range(start: {start_time})
+                |> filter(fn: (r) => r._measurement == "solar_metrics")
+                |> filter(fn: (r) => r._field == "solar_power" or r._field == "load_power" or r._field == "battery_soc")
+                |> aggregateWindow(every: {resolution}, fn: mean, createEmpty: false)
+                |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+                |> sort(columns: ["_time"])
+            '''
+            
+            result = self.query_api.query(query)
+            data = []
+            
+            for table in result:
+                for record in table.records:
+                    data.append({
+                        'timestamp': record.get_time().isoformat(),
+                        'generation': record.get('solar_power', 0),
+                        'consumption': record.get('load_power', 0),
+                        'battery_soc': record.get('battery_soc', 0),
+                        'battery_level': record.get('battery_soc', 0)  # Alias for compatibility
+                    })
+            
+            return data
+            
+        except Exception as e:
+            logger.error(f"Error querying timeseries data: {e}")
+            return []
 
 
 # Singleton instance for global use

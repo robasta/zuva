@@ -212,6 +212,15 @@ class ApiService {
     return this.request('PUT', '/notifications/preferences', preferences);
   }
 
+  // Timeseries data
+  async getTimeseriesData(startTime: string, resolution: string): Promise<ApiResponse> {
+    const params = new URLSearchParams({
+      start_time: startTime,
+      resolution: resolution
+    });
+    return this.request('GET', `/dashboard/timeseries?${params}`);
+  }
+
   async createTestAlert(severity: string = 'low'): Promise<ApiResponse> {
     return this.request('POST', `/alerts/test?severity=${severity}`);
   }
