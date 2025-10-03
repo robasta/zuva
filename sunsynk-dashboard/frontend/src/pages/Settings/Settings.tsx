@@ -680,7 +680,24 @@ export const Settings: React.FC = () => {
                   control={
                     <Switch 
                       checked={darkMode}
-                      onChange={(e) => setDarkMode(e.target.checked)}
+                      onChange={(e) => {
+                        const newDarkMode = e.target.checked;
+                        setDarkMode(newDarkMode);
+                        // Auto-save dark mode changes immediately
+                        const currentSettings = JSON.parse(localStorage.getItem('dashboard_settings') || '{}');
+                        const updatedSettings = {
+                          ...currentSettings,
+                          refreshInterval,
+                          darkMode: newDarkMode,
+                          autoRefresh
+                        };
+                        localStorage.setItem('dashboard_settings', JSON.stringify(updatedSettings));
+                        // Trigger storage event for cross-tab sync
+                        window.dispatchEvent(new StorageEvent('storage', {
+                          key: 'dashboard_settings',
+                          newValue: JSON.stringify(updatedSettings)
+                        }));
+                      }}
                     />
                   }
                   label="Dark mode"

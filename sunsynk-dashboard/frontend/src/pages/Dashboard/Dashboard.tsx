@@ -242,9 +242,6 @@ export const Dashboard: React.FC = () => {
           }}>
             <Box display="flex" justifyContent="space-between" alignItems="center">
               <Box>
-                <Typography variant="h4" component="h1" gutterBottom>
-                  🌞 Live Solar System Monitoring
-                </Typography>
                 <Typography variant="h6">
                   Inverter: 2305156257 | Randburg, ZA | Last Update: {lastUpdate}
                 </Typography>
@@ -447,11 +444,7 @@ export const Dashboard: React.FC = () => {
                       <Grid item xs={2} key={index}>
                         <Box textAlign="center" sx={{ p: 1, bgcolor: 'grey.100', borderRadius: 1 }}>
                           <Typography variant="caption" display="block">
-                            {new Date(forecast.time).toLocaleString('en-ZA', {
-                              timeZone: 'Africa/Johannesburg',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            })}:00
+                            {forecast.time}
                           </Typography>
                           <Typography variant="body2" fontWeight="bold">
                             {Math.round(forecast.temperature)}°

@@ -337,13 +337,81 @@ class InfluxDBManager:
 
 # Weather API Usage Tracking
 class WeatherAPIUsageTracker:
-    def __init__(self):
+    def __init__(self, data_file_path="/app/data/weather_api_usage.json"):
+        self.data_file_path = data_file_path
         self.calls_today = 0
         self.calls_this_month = 0
         self.total_calls = 0
         self.last_reset = None
         self.last_call_date = None
         self.start_date = datetime.now().date()
+        
+        # Load existing data from persistent storage
+        self._load_data()
+        
+    def _ensure_data_directory(self):
+        """Ensure the data directory exists"""
+        import os
+        data_dir = os.path.dirname(self.data_file_path)
+        if not os.path.exists(data_dir):
+            os.makedirs(data_dir, exist_ok=True)
+            
+    def _load_data(self):
+        """Load usage data from persistent storage"""
+        try:
+            import os
+            import json
+            
+            if os.path.exists(self.data_file_path):
+                with open(self.data_file_path, 'r') as f:
+                    data = json.load(f)
+                    
+                self.calls_today = data.get('calls_today', 0)
+                self.calls_this_month = data.get('calls_this_month', 0)
+                self.total_calls = data.get('total_calls', 0)
+                
+                # Parse datetime fields
+                if data.get('last_reset'):
+                    self.last_reset = datetime.fromisoformat(data['last_reset'])
+                    
+                if data.get('last_call_date'):
+                    self.last_call_date = datetime.fromisoformat(data['last_call_date']).date()
+                    
+                if data.get('start_date'):
+                    self.start_date = datetime.fromisoformat(data['start_date']).date()
+                    
+                logger.info(f"📊 Loaded weather API usage data: Today: {self.calls_today}, Month: {self.calls_this_month}, Total: {self.total_calls}")
+            else:
+                logger.info("📊 No existing weather API usage data found, starting fresh")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load weather API usage data: {e}")
+            # Continue with default values
+            
+    def _save_data(self):
+        """Save usage data to persistent storage"""
+        try:
+            import json
+            
+            self._ensure_data_directory()
+            
+            data = {
+                'calls_today': self.calls_today,
+                'calls_this_month': self.calls_this_month,
+                'total_calls': self.total_calls,
+                'last_reset': self.last_reset.isoformat() if self.last_reset else None,
+                'last_call_date': self.last_call_date.isoformat() if self.last_call_date else None,
+                'start_date': self.start_date.isoformat() if self.start_date else None,
+                'last_saved': datetime.now().isoformat()
+            }
+            
+            with open(self.data_file_path, 'w') as f:
+                json.dump(data, f, indent=2)
+                
+            logger.debug(f"💾 Weather API usage data saved to {self.data_file_path}")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to save weather API usage data: {e}")
         
     def record_api_call(self):
         """Record a weather API call"""
@@ -365,6 +433,9 @@ class WeatherAPIUsageTracker:
         self.calls_today += 1
         self.calls_this_month += 1
         self.total_calls += 1
+        
+        # Save data after each API call to ensure persistence
+        self._save_data()
         
         logger.debug(f"🌤️ Weather API call recorded. Today: {self.calls_today}, Month: {self.calls_this_month}, Total: {self.total_calls}")
         
@@ -1159,6 +1230,10 @@ class BackgroundTasks:
         # Start consumption monitoring
         task2 = asyncio.create_task(self.consumption_monitoring())
         self.tasks.append(task2)
+        
+        # Start periodic weather API usage data saving
+        task3 = asyncio.create_task(self.periodic_weather_api_save())
+        self.tasks.append(task3)
 
     async def stop_background_tasks(self):
         self.running = False
@@ -1222,6 +1297,26 @@ class BackgroundTasks:
             except Exception as e:
                 logger.error(f"❌ Error in consumption monitoring: {e}")
                 await asyncio.sleep(60)
+                
+    async def periodic_weather_api_save(self):
+        """Periodically save weather API usage data to ensure persistence"""
+        logger.info("💾 Starting periodic weather API usage data saving...")
+        
+        while self.running:
+            try:
+                # Save weather API usage data every 5 minutes
+                await asyncio.sleep(300)  # 5 minutes
+                
+                if weather_api_tracker:
+                    weather_api_tracker._save_data()
+                    logger.debug("💾 Weather API usage data saved periodically")
+                    
+            except asyncio.CancelledError:
+                logger.info("Periodic weather API save task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"❌ Error in periodic weather API save: {e}")
+                await asyncio.sleep(60)
 
 background_tasks = BackgroundTasks()
 
@@ -1233,6 +1328,14 @@ async def lifespan(app: FastAPI):
     await background_tasks.start_background_tasks()
     yield
     logger.info("Shutting down Sunsynk Dashboard API...")
+    
+    # Save weather API usage data before shutdown
+    try:
+        weather_api_tracker._save_data()
+        logger.info("💾 Weather API usage data saved during shutdown")
+    except Exception as e:
+        logger.error(f"❌ Failed to save weather API usage data during shutdown: {e}")
+    
     await background_tasks.stop_background_tasks()
 
 # FastAPI app initialization
@@ -2551,6 +2654,19 @@ async def set_setting(
 async def get_weather_api_stats(user: dict = Depends(verify_token)):
     """Get weather API usage statistics"""
     return weather_api_tracker.get_stats()
+
+@app.post("/api/weather/api-stats/save")
+async def save_weather_api_stats(user: dict = Depends(verify_token)):
+    """Manually save weather API usage statistics to persistent storage"""
+    try:
+        weather_api_tracker._save_data()
+        return {
+            "message": "Weather API usage statistics saved successfully",
+            "stats": weather_api_tracker.get_stats()
+        }
+    except Exception as e:
+        logger.error(f"❌ Failed to save weather API usage stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save weather API usage statistics: {str(e)}")
 
 @app.get("/api/weather/test-location")
 async def test_weather_location(user: dict = Depends(verify_token)):
