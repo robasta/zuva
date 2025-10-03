@@ -425,6 +425,47 @@ class RealSunsynkCollector:
                 'description': 'Weather data unavailable'
             }
     
+    async def collect_weather_forecast(self):
+        """Collect 5-day weather forecast data for dashboard widget."""
+        try:
+            url = f"http://api.openweathermap.org/data/2.5/forecast"
+            params = {
+                'q': self.location,
+                'appid': self.weather_key,
+                'units': 'metric',
+                'cnt': 40  # 5 days * 8 forecasts per day (3-hour intervals)
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as response:
+                    # Record the API call for usage tracking
+                    weather_api_tracker.record_api_call()
+                    
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        # Process forecast data to match frontend interface
+                        forecast_list = []
+                        for item in data.get('list', []):
+                            forecast_time = datetime.fromtimestamp(item['dt'])
+                            forecast_list.append({
+                                'time': forecast_time.strftime('%H:%M'),
+                                'temperature': round(item['main']['temp']),
+                                'condition': item['weather'][0]['main'].lower(),
+                                'humidity': item['main']['humidity'],
+                                'wind_speed': round(item['wind'].get('speed', 0) * 3.6, 1),  # Convert m/s to km/h
+                                'visibility': round(item.get('visibility', 10000) / 1000, 1)  # Convert m to km
+                            })
+                        
+                        return forecast_list
+                    else:
+                        logger.warning(f"Forecast API error {response.status}")
+                        return []
+                        
+        except Exception as e:
+            logger.error(f"Weather forecast API error: {e}")
+            return []
+    
     async def collect_sunsynk_data(self, client, inverter_sn):
         try:
             battery = await client.get_inverter_realtime_battery(inverter_sn)
@@ -466,6 +507,7 @@ class RealSunsynkCollector:
                 
                 solar_data = await self.collect_sunsynk_data(client, inverter_sn)
                 weather_data = await self.collect_weather_data()
+                weather_forecast = await self.collect_weather_forecast()
                 
                 if not solar_data:
                     logger.error("Failed to collect solar data")
@@ -474,6 +516,7 @@ class RealSunsynkCollector:
                 combined_data = {
                     'solar_data': solar_data,
                     'weather_data': weather_data,
+                    'weather_forecast': weather_forecast,
                     'timestamp': datetime.now()
                 }
                 
@@ -506,6 +549,7 @@ class RealSunsynkCollector:
             
         solar = self.latest_data['solar_data']
         weather = self.latest_data['weather_data']
+        forecast = self.latest_data.get('weather_forecast', [])
         
         return {
             'metrics': {
@@ -523,7 +567,8 @@ class RealSunsynkCollector:
                 'inverter_status': 'online',
                 'battery_status': 'normal' if solar['battery_soc'] > 20 else 'low',
                 'grid_status': 'connected'
-            }
+            },
+            'weather_forecast': forecast
         }
 
 # Consumption monitoring helper functions

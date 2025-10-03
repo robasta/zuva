@@ -30,7 +30,8 @@ import {
   Air,
   Visibility
 } from '@mui/icons-material';
-} from '@mui/icons-material';\nimport { formatTimeWithTimezone, formatDateTimeWithTimezone } from '../../utils/timezone';\nimport TimeSeriesGraph from '../../components/TimeSeriesGraph/TimeSeriesGraph';
+import { formatTimeWithTimezone, formatDateTimeWithTimezone } from '../../utils/timezone';
+import TimeSeriesGraph from '../../components/TimeSeriesGraph/TimeSeriesGraph';
 
 const REFRESH_INTERVAL = 30000; // 30 seconds
 
@@ -122,8 +123,14 @@ export const Dashboard: React.FC = () => {
         throw new Error('Failed to fetch dashboard data');
       }
 
-            const data = await dashboardResponse.json();
+      const data = await dashboardResponse.json();
       setData(data);
+      
+      // Extract weather forecast from response
+      if (data.weather_forecast && Array.isArray(data.weather_forecast)) {
+        setWeatherForecast(data.weather_forecast);
+      }
+      
       setLastUpdate(formatTimeWithTimezone(new Date()));
       setLoading(false);
     } catch (err) {
