@@ -1,27 +1,28 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Card,
   CardContent,
-  CardHeader,
   Box,
   Typography,
   Button,
   ButtonGroup,
-  IconButton,
-  TextField,
-  Chip,
   CircularProgress,
-  Alert,
-  Tooltip,
-  Grid
+  Alert
 } from '@mui/material';
 import {
   TrendingUp as TrendingUpIcon,
-  NavigateBefore as NavigateBeforeIcon,
-  NavigateNext as NavigateNextIcon,
-  Today as TodayIcon,
   Refresh as RefreshIcon
 } from '@mui/icons-material';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer
+} from 'recharts';
 import { apiService } from '../../services/apiService';
 
 interface TimeSeriesDataPoint {
@@ -29,7 +30,6 @@ interface TimeSeriesDataPoint {
   generation: number;
   consumption: number;
   battery_soc: number;
-  battery_level?: number;
 }
 
 interface TimeSeriesProps {
@@ -39,59 +39,89 @@ interface TimeSeriesProps {
   refreshInterval?: number;
 }
 
-type TimeRange = '3h' | '6h' | '12h' | '24h';
-type Resolution = '1m' | '5m' | '15m' | '1h';
-
-const TIME_RANGE_OPTIONS: { value: TimeRange; label: string; resolution: Resolution }[] = [
-  { value: '3h', label: '3 Hours', resolution: '1m' },
-  { value: '6h', label: '6 Hours', resolution: '5m' },
-  { value: '12h', label: '12 Hours', resolution: '5m' },
-  { value: '24h', label: '24 Hours', resolution: '15m' }
-];
+type TimeRange = '6h' | '12h' | '24h';
 
 const TimeSeriesGraph: React.FC<TimeSeriesProps> = ({
   height = 400,
   showControls = true,
   autoRefresh = true,
-  refreshInterval = 30000
+  refreshInterval = 900000  // 15 minutes instead of 30 seconds
 }) => {
   const [data, setData] = useState<TimeSeriesDataPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedDate, setSelectedDate] = useState<string>(
-    new Date().toISOString().split('T')[0]
-  );
   const [timeRange, setTimeRange] = useState<TimeRange>('24h');
-  const [resolution, setResolution] = useState<Resolution>('15m');
-  const [isToday, setIsToday] = useState(true);
 
-  // Calculate start time based on selected date and time range
-  const getStartTime = useCallback(() => {
-    if (isToday) {
-      // For today, use relative time
-      return `-${timeRange}`;
-    } else {
-      // For historical dates, calculate absolute start time
-      const selected = new Date(selectedDate);
-      const hours = parseInt(timeRange.replace('h', ''));
-      const startTime = new Date(selected.getTime() + (24 - hours) * 60 * 60 * 1000);
-      return startTime.toISOString();
-    }
-  }, [selectedDate, timeRange, isToday]);
-
-  // Load timeseries data
-  const loadData = useCallback(async () => {
+  // Load data function
+  const loadData = async () => {
     try {
       setLoading(true);
       setError(null);
-
-      const startTime = getStartTime();
-      const response = await apiService.getTimeseriesData(startTime, resolution);
       
-      if (response.success && response.data) {
-        setData(response.data as TimeSeriesDataPoint[]);
+      console.log(`Loading timeseries data for ${timeRange}...`);
+      const response = await apiService.getTimeseriesData(`-${timeRange}`, '15m');
+      
+      console.log('Timeseries API response:', response);
+      
+      // Handle nested response structure: response.data.data contains the actual array
+      const actualData = response.success && response.data && response.data.data ? response.data.data : [];
+      
+      if (response.success && Array.isArray(actualData) && actualData.length > 0) {
+        console.log(`Received ${actualData.length} data points:`, actualData.slice(0, 2));
+
+        const parseValue = (value: any): number | null => {
+          if (value === null || value === undefined || value === '') {
+            return null;
+          }
+          const numericValue = Number(value);
+          return Number.isFinite(numericValue) ? numericValue : null;
+        };
+
+        const formattedData = actualData.reduce<TimeSeriesDataPoint[]>((acc, point: any) => {
+          const parsedGeneration = parseValue(point.generation);
+          const parsedConsumption = parseValue(point.consumption);
+          const parsedBattery = parseValue(point.battery_soc ?? point.battery_level);
+
+          const hasData =
+            (parsedGeneration ?? 0) !== 0 ||
+            (parsedConsumption ?? 0) !== 0 ||
+            (parsedBattery ?? 0) !== 0;
+
+          if (!hasData) {
+            return acc;
+          }
+
+          acc.push({
+            timestamp: point.timestamp,
+            generation: parsedGeneration ?? 0,
+            consumption: parsedConsumption ?? 0,
+            battery_soc: parsedBattery ?? 0
+          });
+          return acc;
+        }, []);
+
+        // Debug consumption values
+        const consumptionValues = formattedData.map(p => p.consumption);
+        const consumptionRange = consumptionValues.length > 0 ? {
+          min: Math.min(...consumptionValues),
+          max: Math.max(...consumptionValues),
+          avg: consumptionValues.reduce((a, b) => a + b, 0) / consumptionValues.length
+        } : { min: 0, max: 0, avg: 0 };
+
+        console.log('Raw data count:', actualData.length);
+        console.log('Filtered data count:', formattedData.length);
+        console.log('Formatted data sample:', formattedData.slice(0, 3));
+        console.log('Consumption range:', consumptionRange);
+        setData(formattedData);
       } else {
-        throw new Error('Invalid response format');
+        console.error('API response not successful or no data:', {
+          responseSuccess: response.success,
+          hasData: !!response.data,
+          dataType: typeof response.data,
+          isArray: Array.isArray(response.data?.data),
+          actualData: response.data?.data
+        });
+        setError(response.error || 'No data available');
       }
     } catch (err: any) {
       console.error('Failed to load timeseries data:', err);
@@ -99,251 +129,204 @@ const TimeSeriesGraph: React.FC<TimeSeriesProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [getStartTime, resolution]);
-
-  // Handle date navigation
-  const navigateDate = (direction: 'prev' | 'next' | 'today') => {
-    const current = new Date(selectedDate);
-    
-    switch (direction) {
-      case 'prev':
-        current.setDate(current.getDate() - 1);
-        setSelectedDate(current.toISOString().split('T')[0]);
-        setIsToday(false);
-        break;
-      case 'next':
-        current.setDate(current.getDate() + 1);
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        if (current <= tomorrow) {
-          setSelectedDate(current.toISOString().split('T')[0]);
-          setIsToday(current.toDateString() === new Date().toDateString());
-        }
-        break;
-      case 'today':
-        setSelectedDate(new Date().toISOString().split('T')[0]);
-        setIsToday(true);
-        break;
-    }
   };
 
-  // Handle time range change
-  const handleTimeRangeChange = (newRange: TimeRange) => {
-    const option = TIME_RANGE_OPTIONS.find(opt => opt.value === newRange);
-    if (option) {
-      setTimeRange(newRange);
-      setResolution(option.resolution);
-    }
-  };
-
-  // Calculate summary statistics
-  const getSummaryStats = () => {
-    if (data.length === 0) return null;
-    
-    const avgGeneration = data.reduce((sum, point) => sum + point.generation, 0) / data.length;
-    const avgConsumption = data.reduce((sum, point) => sum + point.consumption, 0) / data.length;
-    const currentBattery = data[data.length - 1]?.battery_soc || 0;
-    const maxGeneration = Math.max(...data.map(point => point.generation));
-    const maxConsumption = Math.max(...data.map(point => point.consumption));
-    
-    return {
-      avgGeneration,
-      avgConsumption,
-      currentBattery,
-      maxGeneration,
-      maxConsumption,
-      totalDataPoints: data.length
-    };
-  };
-
-  // Auto-refresh effect
-  useEffect(() => {
-    if (autoRefresh && isToday) {
-      const interval = setInterval(loadData, refreshInterval);
-      return () => clearInterval(interval);
-    }
-  }, [autoRefresh, isToday, refreshInterval, loadData]);
-
-  // Initial load and reload when dependencies change
+  // Load data on mount and when timeRange changes
   useEffect(() => {
     loadData();
-  }, [loadData]);
+  }, [timeRange]);
 
-  const stats = getSummaryStats();
+  // Auto refresh
+  useEffect(() => {
+    if (!autoRefresh) return;
+    
+    const interval = setInterval(loadData, refreshInterval);
+    return () => clearInterval(interval);
+  }, [autoRefresh, refreshInterval, timeRange]);
 
   return (
-    <Card sx={{ height: 'fit-content' }}>
-      <CardHeader
-        title={
-          <Box display="flex" alignItems="center" gap={1}>
-            <TrendingUpIcon color="primary" />
-            <Typography variant="h6">Power & Battery Monitor</Typography>
-            {loading && <CircularProgress size={20} />}
-          </Box>
-        }
-        action={
-          showControls && (
-            <Box display="flex" alignItems="center" gap={1}>
-              <Chip
-                label={`${data.length} points`}
-                size="small"
-                variant="outlined"
-              />
-              <Tooltip title="Refresh">
-                <IconButton onClick={loadData} disabled={loading}>
-                  <RefreshIcon />
-                </IconButton>
-              </Tooltip>
-            </Box>
-          )
-        }
-      />
-      
+    <Card>
       <CardContent>
-        {showControls && (
-          <Box sx={{ mb: 3 }}>
-            {/* Date Navigation */}
-            <Box display="flex" alignItems="center" gap={2} sx={{ mb: 2 }}>
-              <Box display="flex" alignItems="center" gap={1}>
-                <IconButton 
-                  onClick={() => navigateDate('prev')}
-                  size="small"
-                >
-                  <NavigateBeforeIcon />
-                </IconButton>
-                
-                <TextField
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => {
-                    setSelectedDate(e.target.value);
-                    setIsToday(e.target.value === new Date().toISOString().split('T')[0]);
-                  }}
-                  size="small"
-                  sx={{ width: 150 }}
-                />
-                
-                <IconButton 
-                  onClick={() => navigateDate('next')}
-                  size="small"
-                  disabled={selectedDate >= new Date().toISOString().split('T')[0]}
-                >
-                  <NavigateNextIcon />
-                </IconButton>
-                
-                <Button
-                  onClick={() => navigateDate('today')}
-                  size="small"
-                  startIcon={<TodayIcon />}
-                  variant="outlined"
-                >
-                  Today
-                </Button>
-              </Box>
-
-              {isToday && (
-                <Chip
-                  label="Live"
-                  color="success"
-                  size="small"
-                  sx={{ animation: 'pulse 2s infinite' }}
-                />
-              )}
-            </Box>
-
-            {/* Time Range Controls */}
-            <ButtonGroup size="small" variant="outlined">
-              {TIME_RANGE_OPTIONS.map((option) => (
-                <Button
-                  key={option.value}
-                  onClick={() => handleTimeRangeChange(option.value)}
-                  variant={timeRange === option.value ? 'contained' : 'outlined'}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </ButtonGroup>
+        {/* Header */}
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+          <Box display="flex" alignItems="center">
+            <TrendingUpIcon sx={{ mr: 1, color: 'primary.main' }} />
+            <Typography variant="h6">Energy Timeline</Typography>
           </Box>
-        )}
+          
+          {showControls && (
+            <Box display="flex" alignItems="center" gap={2}>
+              <ButtonGroup size="small">
+                <Button 
+                  variant={timeRange === '6h' ? 'contained' : 'outlined'}
+                  onClick={() => setTimeRange('6h')}
+                >
+                  6H
+                </Button>
+                <Button 
+                  variant={timeRange === '12h' ? 'contained' : 'outlined'}
+                  onClick={() => setTimeRange('12h')}
+                >
+                  12H
+                </Button>
+                <Button 
+                  variant={timeRange === '24h' ? 'contained' : 'outlined'}
+                  onClick={() => setTimeRange('24h')}
+                >
+                  24H
+                </Button>
+              </ButtonGroup>
+              
+              <Button
+                size="small"
+                startIcon={<RefreshIcon />}
+                onClick={loadData}
+                disabled={loading}
+              >
+                Refresh
+              </Button>
+            </Box>
+          )}
+        </Box>
 
-        {/* Error Display */}
+        {/* Error State */}
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
             {error}
           </Alert>
         )}
 
-        {/* Summary Statistics */}
-        {stats && (
-          <Grid container spacing={2} sx={{ mb: 3 }}>
-            <Grid item xs={6} md={3}>
-              <Box textAlign="center" p={2} bgcolor="primary.light" borderRadius={2}>
-                <Typography variant="h4" color="primary.main">
-                  {stats.avgGeneration.toFixed(1)}
-                </Typography>
-                <Typography variant="caption">Avg Generation (kW)</Typography>
-              </Box>
-            </Grid>
-            <Grid item xs={6} md={3}>
-              <Box textAlign="center" p={2} bgcolor="warning.light" borderRadius={2}>
-                <Typography variant="h4" color="warning.main">
-                  {stats.avgConsumption.toFixed(1)}
-                </Typography>
-                <Typography variant="caption">Avg Consumption (kW)</Typography>
-              </Box>
-            </Grid>
-            <Grid item xs={6} md={3}>
-              <Box textAlign="center" p={2} bgcolor="info.light" borderRadius={2}>
-                <Typography variant="h4" color="info.main">
-                  {stats.currentBattery.toFixed(1)}%
-                </Typography>
-                <Typography variant="caption">Current Battery SOC</Typography>
-              </Box>
-            </Grid>
-            <Grid item xs={6} md={3}>
-              <Box textAlign="center" p={2} bgcolor="success.light" borderRadius={2}>
-                <Typography variant="h4" color="success.main">
-                  {stats.maxGeneration.toFixed(1)}
-                </Typography>
-                <Typography variant="caption">Peak Generation (kW)</Typography>
-              </Box>
-            </Grid>
-          </Grid>
+        {/* Debug Info */}
+        {data.length > 0 && (
+          <Box sx={{ mb: 2, p: 1, bgcolor: 'info.light', borderRadius: 1 }}>
+            <Typography variant="caption" color="info.dark">
+              Debug: {data.length} data points loaded for {timeRange}. 
+              Sample: {data[0]?.timestamp} - Gen: {data[0]?.generation}kW, Cons: {data[0]?.consumption}kW, Batt: {data[0]?.battery_soc}%
+            </Typography>
+          </Box>
         )}
 
-        {/* Placeholder for Chart */}
-        <Box 
-          sx={{ 
-            width: '100%', 
-            height: height, 
-            border: '2px dashed',
-            borderColor: 'divider',
-            borderRadius: 2,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexDirection: 'column',
-            gap: 2,
-            bgcolor: 'background.default'
-          }}
-        >
+        {/* Chart */}
+        <Box sx={{ width: '100%', height: height }}>
           {loading ? (
-            <CircularProgress size={60} />
+            <Box display="flex" justifyContent="center" alignItems="center" height="100%">
+              <CircularProgress />
+            </Box>
+          ) : data.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={data}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis 
+                  dataKey="timestamp"
+                  tickCount={6}
+                  minTickGap={50}
+                  tickFormatter={(value: string) => {
+                    try {
+                      const date = new Date(value);
+                      return date.toLocaleTimeString('en-US', { 
+                        hour: '2-digit', 
+                        minute: '2-digit',
+                        hour12: false 
+                      });
+                    } catch {
+                      return '';
+                    }
+                  }}
+                />
+                <YAxis 
+                  yAxisId="power"
+                  orientation="left"
+                  label={{ value: 'Power (kW)', angle: -90, position: 'insideLeft' }}
+                />
+                <YAxis 
+                  yAxisId="battery"
+                  orientation="right"
+                  domain={[0, 100]}
+                  label={{ value: 'Battery (%)', angle: 90, position: 'insideRight' }}
+                />
+                <Tooltip 
+                  labelFormatter={(value: string) => {
+                    try {
+                      const date = new Date(value);
+                      return date.toLocaleString();
+                    } catch {
+                      return value?.toString() || '';
+                    }
+                  }}
+                  formatter={(value: any, _name: string, props: any) => {
+                    const metricConfig: Record<string, { label: string; unit: string; precision: number }> = {
+                      generation: { label: 'Solar Generation', unit: 'kW', precision: 2 },
+                      consumption: { label: 'Consumption', unit: 'kW', precision: 2 },
+                      battery_soc: { label: 'Battery SOC', unit: '%', precision: 1 }
+                    };
+                    const dataKey = String(props?.dataKey ?? '');
+                    const metric = metricConfig[dataKey] ?? { label: dataKey, unit: '', precision: 2 };
+                    const numericValue = Number(value ?? 0);
+                    const safeValue = Number.isFinite(numericValue) ? numericValue : 0;
+                    const formattedValue = metric.unit
+                      ? `${safeValue.toFixed(metric.precision)} ${metric.unit}`
+                      : safeValue.toFixed(metric.precision);
+                    return [formattedValue, metric.label];
+                  }}
+                />
+                <Legend 
+                  verticalAlign="bottom" 
+                  height={36}
+                  iconType="circle"
+                />
+                <Line 
+                  yAxisId="power"
+                  type="monotone" 
+                  dataKey="generation" 
+                  stroke="transparent" 
+                  strokeWidth={0}
+                  name="Solar Generation"
+                  dot={{ fill: "#ff9800", strokeWidth: 0, r: 4 }}
+                  legendType="circle"
+                />
+                <Line 
+                  yAxisId="power"
+                  type="monotone" 
+                  dataKey="consumption" 
+                  stroke="transparent" 
+                  strokeWidth={0}
+                  name="Consumption"
+                  dot={{ fill: "#9c27b0", strokeWidth: 0, r: 4 }}
+                  legendType="circle"
+                />
+                <Line 
+                  yAxisId="battery"
+                  type="monotone" 
+                  dataKey="battery_soc" 
+                  stroke="transparent" 
+                  strokeWidth={0}
+                  name="Battery SOC"
+                  dot={{ fill: "#4caf50", strokeWidth: 0, r: 4 }}
+                  legendType="circle"
+                />
+              </LineChart>
+            </ResponsiveContainer>
           ) : (
-            <>
-              <TrendingUpIcon sx={{ fontSize: 60, color: 'text.disabled' }} />
-              <Typography variant="h6" color="text.disabled">
-                Time Series Chart
+            <Box 
+              sx={{ 
+                width: '100%', 
+                height: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexDirection: 'column',
+                gap: 2,
+                color: 'text.secondary'
+              }}
+            >
+              <TrendingUpIcon sx={{ fontSize: 60 }} />
+              <Typography variant="h6">
+                No Data Available
               </Typography>
-              <Typography variant="body2" color="text.disabled" textAlign="center">
-                Interactive chart with generation, consumption, and battery SOC data
+              <Typography variant="body2" textAlign="center">
+                Unable to load timeseries data for the selected time range
               </Typography>
-              {stats && (
-                <Typography variant="caption" color="text.disabled">
-                  Displaying {stats.totalDataPoints} data points for {timeRange}
-                </Typography>
-              )}
-            </>
+            </Box>
           )}
         </Box>
       </CardContent>
