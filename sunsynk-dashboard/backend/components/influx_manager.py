@@ -73,7 +73,7 @@ class InfluxManager:
             return True
             
         except Exception as e:
-            logger.error(f"❌ Failed to write data point: {e}")
+            logger.error(f"❌ InfluxDB connection error: {e}")
             return False
     
     def write_solar_data(self, data: Dict[str, Any]) -> bool:
@@ -87,7 +87,13 @@ class InfluxManager:
     def query_historical_data(self, hours: int = 24) -> List[Dict[str, Any]]:
         """Query historical data from InfluxDB"""
         if not self.is_available():
-            logger.debug(f"📊 Mock query: last {hours} hours")
+            # Check environment variable for mock data policy
+            disable_mock_fallback = os.getenv('DISABLE_MOCK_FALLBACK', 'false').lower() == 'true'
+            if disable_mock_fallback:
+                logger.error("❌ InfluxDB unavailable and mock data fallback is disabled")
+                return []
+                
+            logger.debug(f"📊 InfluxDB unavailable, generating mock data for last {hours} hours")
             return self._generate_mock_data(hours)
         
         try:
@@ -124,10 +130,19 @@ class InfluxManager:
             
         except Exception as e:
             logger.error(f"❌ Failed to query historical data: {e}")
+            
+            # Check environment variable for mock data policy
+            disable_mock_fallback = os.getenv('DISABLE_MOCK_FALLBACK', 'false').lower() == 'true'
+            if disable_mock_fallback:
+                logger.error("❌ InfluxDB query failed and mock data fallback is disabled")
+                return []
+                
+            logger.warning("⚠️ InfluxDB query failed, generating mock data as fallback")
             return self._generate_mock_data(hours)
     
     def _generate_mock_data(self, hours: int) -> List[Dict[str, Any]]:
         """Generate mock data when InfluxDB is not available"""
+        logger.warning(f"🎭 GENERATING MOCK DATA: {hours} hours of synthetic solar data")
         import random
         import math
         
@@ -170,6 +185,61 @@ class InfluxManager:
             data_points.append(data_point)
         
         return sorted(data_points, key=lambda x: x["timestamp"])
+    
+    def query_timeseries_data(self, start_time: str = "-24h", resolution: str = "5m") -> List[Dict[str, Any]]:
+        """Query timeseries data optimized for dashboard charts"""
+        if not self.is_available():
+            logger.debug(f"📊 Mock timeseries query: {start_time}")
+            return []
+            
+        try:
+            # Build the query for timeseries data
+            query = f'''
+            from(bucket: "{self.bucket}")
+                |> range(start: {start_time})
+                |> filter(fn: (r) => r._measurement == "solar_metrics")
+                |> filter(fn: (r) => r._field == "solar_power" or 
+                                   r._field == "load_power" or 
+                                   r._field == "consumption" or 
+                                   r._field == "battery_soc" or 
+                                   r._field == "battery_level")
+                |> aggregateWindow(every: {resolution}, fn: mean, createEmpty: false)
+                |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+                |> sort(columns: ["_time"])
+            '''
+            
+            # Execute query
+            result = self.query_api.query(org=self.org, query=query)
+            
+            data_points = []
+            
+            # Process results - handle both list and generator cases
+            if hasattr(result, '__iter__'):
+                for table in result:
+                    if hasattr(table, 'records'):
+                        for record in table.records:
+                            # Extract values safely
+                            timestamp = record.get_time()
+                            values = record.values
+                            
+                            data_point = {
+                                "timestamp": timestamp.isoformat() if timestamp else None,
+                                "generation": values.get("solar_power", 0) or 0,
+                                "consumption": values.get("load_power", values.get("consumption", 0)) or 0,
+                                "battery_soc": values.get("battery_soc", values.get("battery_level", 0)) or 0,
+                                "battery_level": values.get("battery_soc", values.get("battery_level", 0)) or 0
+                            }
+                            
+                            # Only add valid data points
+                            if data_point["timestamp"]:
+                                data_points.append(data_point)
+            
+            logger.info(f"📊 Retrieved {len(data_points)} timeseries data points from InfluxDB")
+            return sorted(data_points, key=lambda x: x["timestamp"])
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to query timeseries data: {e}")
+            return []
     
     def get_latest_data(self) -> Optional[Dict[str, Any]]:
         """Get the most recent data point"""

@@ -73,11 +73,12 @@ const Header: React.FC<HeaderProps> = ({ onSidebarToggle, sidebarOpen, drawerWid
           easing: theme.transitions.easing.sharp,
           duration: theme.transitions.duration.leavingScreen,
         }),
-        backgroundColor: 'primary.main',
+        backgroundColor: 'background.paper',
+        color: 'text.primary',
         boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
       }}
     >
-      <Toolbar>
+      <Toolbar sx={{ minHeight: '56px !important' }}>
         <IconButton
           color="inherit"
           aria-label="toggle drawer"
@@ -88,7 +89,7 @@ const Header: React.FC<HeaderProps> = ({ onSidebarToggle, sidebarOpen, drawerWid
           <MenuIcon />
         </IconButton>
 
-        <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1, fontWeight: 600 }}>
+        <Typography variant="subtitle1" noWrap component="div" sx={{ flexGrow: 1, fontWeight: 500 }}>
           🌞 Sunsynk Solar Dashboard
         </Typography>
 
@@ -100,8 +101,6 @@ const Header: React.FC<HeaderProps> = ({ onSidebarToggle, sidebarOpen, drawerWid
             size="small"
             variant="outlined"
             sx={{
-              color: 'white',
-              borderColor: 'rgba(255, 255, 255, 0.5)',
               '&.MuiChip-colorSuccess': {
                 borderColor: '#28A745',
                 color: '#28A745'

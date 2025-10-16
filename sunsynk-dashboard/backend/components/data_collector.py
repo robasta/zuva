@@ -41,17 +41,17 @@ class RealDataCollector:
         username = os.getenv('SUNSYNK_USERNAME')
         password = os.getenv('SUNSYNK_PASSWORD')
         
-        if username and password:
-            try:
-                self.client = self.SunsynkClient(username, password)
-                logger.info("✅ Sunsynk client initialized")
-                self.is_connected = True
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize Sunsynk client: {e}")
-                self.is_connected = False
-        else:
-            logger.warning("⚠️ Sunsynk credentials not provided, using mock data")
-            self.is_connected = False
+        # Validate required environment variables
+        if not username or not password:
+            logger.error("❌ SUNSYNK_USERNAME and SUNSYNK_PASSWORD environment variables must be set")
+            
+            # Check if mock data fallback is disabled
+            disable_mock_fallback = os.getenv('DISABLE_MOCK_FALLBACK', 'false').lower() == 'true'
+            if disable_mock_fallback:
+                raise ValueError("SUNSYNK_USERNAME and SUNSYNK_PASSWORD must be set and mock data fallback is disabled")
+            
+            logger.warning("⚠️ Missing credentials, using mock data")
+            return self._generate_mock_data()
     
     async def collect_data(self) -> Dict[str, Any]:
         """Collect current data from the inverter"""
@@ -130,6 +130,14 @@ class RealDataCollector:
                 
         except Exception as e:
             logger.error(f"❌ Failed to collect real data: {e}")
+            
+            # Check if mock data fallback is disabled
+            disable_mock_fallback = os.getenv('DISABLE_MOCK_FALLBACK', 'false').lower() == 'true'
+            if disable_mock_fallback:
+                logger.error("❌ Real data collection failed and mock data fallback is disabled")
+                return None
+                
+            logger.warning("⚠️ Real data collection failed, generating mock data as fallback")
             return self._generate_mock_data()
     
     def get_current_data(self) -> Optional[Dict[str, Any]]:
@@ -137,10 +145,18 @@ class RealDataCollector:
         if self.current_data:
             return self.current_data
         else:
+            # Check if mock data fallback is disabled
+            disable_mock_fallback = os.getenv('DISABLE_MOCK_FALLBACK', 'false').lower() == 'true'
+            if disable_mock_fallback:
+                logger.error("❌ No current data available and mock data fallback is disabled")
+                return None
+                
+            logger.warning("⚠️ No current data available, generating mock data")
             return self._generate_mock_data()
     
     def _generate_mock_data(self) -> Dict[str, Any]:
         """Generate mock data when real data is not available"""
+        logger.warning("🎭 GENERATING MOCK DATA: Synthetic solar inverter data")
         import random
         import math
         

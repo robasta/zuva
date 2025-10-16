@@ -576,7 +576,7 @@ class DatabaseManager:
                     data.append({
                         'timestamp': record.get_time().isoformat(),
                         'generation': record.get('solar_power', 0),
-                        'consumption': record.get('load_power', 0),
+                        'consumption': record.get('load_power', 0),  # Use load_power for consumption
                         'battery_soc': record.get('battery_soc', 0),
                         'battery_level': record.get('battery_soc', 0)  # Alias for compatibility
                     })

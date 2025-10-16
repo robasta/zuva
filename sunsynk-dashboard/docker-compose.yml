@@ -33,7 +33,7 @@ services:
     environment:
       - SUNSYNK_USERNAME=${SUNSYNK_USERNAME:-demo_user}
       - SUNSYNK_PASSWORD=${SUNSYNK_PASSWORD:-demo_password}
-      - WEATHER_API_KEY=${WEATHER_API_KEY:-demo_weather_key}
+      - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY:-demo_weather_key}
       - LOCATION=${LOCATION:-Cape Town,ZA}
       - INFLUXDB_URL=http://influxdb:8086
       - INFLUXDB_TOKEN=${INFLUXDB_ADMIN_TOKEN:-sunsynk-admin-token}
@@ -68,6 +68,10 @@ services:
     environment:
       - API_HOST=0.0.0.0
       - API_PORT=8000
+      - SUNSYNK_USERNAME=${SUNSYNK_USERNAME:-demo_user}
+      - SUNSYNK_PASSWORD=${SUNSYNK_PASSWORD:-demo_password}
+      - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY:-demo_weather_key}
+      - LOCATION=${LOCATION:-Cape Town,ZA}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-super-secret-jwt-key-change-this}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}
       - INFLUXDB_URL=http://influxdb:8086

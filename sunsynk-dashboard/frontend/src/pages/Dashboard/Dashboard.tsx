@@ -235,14 +235,15 @@ export const Dashboard: React.FC = () => {
         {/* System Overview */}
         <Grid item xs={12}>
           <Paper sx={{ 
-            p: 2, 
-            mb: 3, 
-            background: 'linear-gradient(45deg, #2196F3 30%, #21CBF3 90%)',
-            color: 'white'
+            p: 1.5, 
+            mb: 2, 
+            background: 'background.paper',
+            color: 'text.primary',
+            border: theme => `1px solid ${theme.palette.divider}`
           }}>
             <Box display="flex" justifyContent="space-between" alignItems="center">
               <Box>
-                <Typography variant="h6">
+                <Typography variant="subtitle2" sx={{ fontWeight: 500 }}>
                   Inverter: 2305156257 | Randburg, ZA | Last Update: {lastUpdate}
                 </Typography>
               </Box>
@@ -361,6 +362,16 @@ export const Dashboard: React.FC = () => {
               />
             </CardContent>
           </Card>
+        </Grid>
+
+        {/* Time Series Graph */}
+        <Grid item xs={12}>
+          <TimeSeriesGraph 
+            height={400}
+            showControls={true}
+            autoRefresh={true}
+            refreshInterval={30000}
+          />
         </Grid>
 
         {/* Smart Analytics */}

@@ -28,6 +28,45 @@ A comprehensive solar monitoring system that transforms the Sunsynk API client i
 - **System Alerts**: Grid outages and inverter connectivity issues
 - **Voice Calls**: Critical battery situations with high consumption
 
+## Environment Variables
+
+Create a `.env` file in the dashboard root directory with the following variables:
+
+### Required for Real Data Collection
+```bash
+# Sunsynk API Credentials
+SUNSYNK_USERNAME=your_sunsynk_username
+SUNSYNK_PASSWORD=your_sunsynk_password
+
+# Weather API
+OPENWEATHER_API_KEY=your_openweather_api_key
+LOCATION=Randburg,ZA
+
+# Database
+INFLUXDB_URL=http://localhost:8086
+INFLUXDB_TOKEN=your_influxdb_token
+INFLUXDB_ORG=sunsynk
+INFLUXDB_BUCKET=solar_metrics
+
+# Security
+JWT_SECRET_KEY=your_jwt_secret_key
+
+# Data Source Control
+USE_MOCK_DATA=false
+DISABLE_MOCK_FALLBACK=false
+```
+
+### Data Source Configuration
+- `USE_MOCK_DATA=true`: Forces the application to use only mock data
+- `DISABLE_MOCK_FALLBACK=true`: Prevents fallback to mock data when real data fails (returns errors instead)
+- `DISABLE_MOCK_FALLBACK=false`: Allows fallback to mock data when real data is unavailable (default)
+
+### Important Security Notes
+- Never commit the `.env` file to version control
+- Keep your Sunsynk credentials secure
+- Regenerate tokens periodically
+- Use strong JWT secret keys in production
+
 ## Quick Start
 
 ### Prerequisites

@@ -70,6 +70,10 @@ JWT_SECRET = os.getenv("JWT_SECRET_KEY", "eec390129e82ce9340522b7c79ead660321d6b
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 
+# Data Source Configuration
+USE_MOCK_DATA = os.getenv('USE_MOCK_DATA', 'false').lower() == 'true'
+DISABLE_MOCK_FALLBACK = os.getenv('DISABLE_MOCK_FALLBACK', 'false').lower() == 'true'
+
 # InfluxDB Configuration  
 INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://localhost:8086")
 INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "T72osJpuV_vwsv-8bHauVAjO5R_-HgTJM3iAGsGRG0dI-0MnqvELTTHuBSWHKhRP5_U5IMprDKVC3zawzpLHCA==")
@@ -455,10 +459,17 @@ weather_api_tracker = WeatherAPIUsageTracker()
 # Real Sunsynk Collector
 class RealSunsynkCollector:
     def __init__(self):
-        self.username = 'robert.dondo@gmail.com'
-        self.password = 'M%TcEJvo9^j8di'
-        self.weather_key = '8c0021a3bea8254c109a414d2efaf9d6'
-        self.location = 'Randburg,ZA'
+        self.username = os.getenv('SUNSYNK_USERNAME')
+        self.password = os.getenv('SUNSYNK_PASSWORD')
+        self.weather_key = os.getenv('OPENWEATHER_API_KEY')
+        self.location = os.getenv('LOCATION', 'Randburg,ZA')
+        
+        # Validate required environment variables
+        if not self.username or not self.password:
+            raise ValueError("SUNSYNK_USERNAME and SUNSYNK_PASSWORD environment variables must be set")
+        
+        if not self.weather_key:
+            raise ValueError("OPENWEATHER_API_KEY environment variable must be set")
         
         self.latest_data = None
         self.last_update = None
@@ -1398,6 +1409,13 @@ async def health_check():
             "ml_analytics": "enabled" if PHASE6_AVAILABLE else "disabled"
         },
         "data_sources": {
+            "real_data_enabled": not USE_MOCK_DATA,
+            "mock_fallback_enabled": not DISABLE_MOCK_FALLBACK,
+            "environment_configured": all([
+                os.getenv('SUNSYNK_USERNAME'),
+                os.getenv('SUNSYNK_PASSWORD'),
+                os.getenv('OPENWEATHER_API_KEY')
+            ]),
             "sunsynk_api": "active",
             "weather_api": "active",
             "influxdb_storage": influx_manager.connected,
@@ -1598,15 +1616,51 @@ async def get_dashboard_history(
     hours: int = 24,
     user: dict = Depends(verify_token)
 ):
-    logger.info(f"📊 Fetching {hours} hours of historical data from InfluxDB")
+    logger.info(f"📊 Fetching {hours} hours of historical data")
     
+    # Try to get real data from InfluxDB first
     historical_data = influx_manager.query_historical_data(hours)
     
-    if historical_data:
-        logger.info(f"✅ Retrieved {len(historical_data)} real historical data points")
-        return {"history": historical_data, "source": "influxdb"}
+    if historical_data and len(historical_data) > 0:
+        logger.info(f"✅ Retrieved {len(historical_data)} real historical data points from InfluxDB")
+        return {"history": historical_data, "source": "influxdb", "count": len(historical_data)}
     
-    logger.warning("⚠️ No InfluxDB data, generating fallback historical data")
+    # Try collector database as fallback
+    try:
+        from collector.database import db_manager
+        
+        # Get historical data from collector database
+        recent_data = await db_manager.get_recent_data(hours * 60)  # Convert to minutes
+        
+        if recent_data and len(recent_data) > 0:
+            logger.info(f"✅ Retrieved {len(recent_data)} real historical data points from collector database")
+            
+            # Convert to expected format
+            history = []
+            for record in recent_data:
+                history.append({
+                    "timestamp": record.get("timestamp"),
+                    "solar_power": record.get("solar_power", 0),
+                    "battery_level": record.get("battery_soc", record.get("battery_level", 0)),
+                    "grid_power": record.get("grid_power", 0),
+                    "consumption": record.get("load_power", record.get("consumption", 0)),
+                    "battery_power": record.get("battery_power", 0),
+                    "temperature": record.get("battery_temp", 25.0)
+                })
+            
+            return {"history": history, "source": "collector_database", "count": len(history)}
+            
+    except Exception as e:
+        logger.error(f"❌ Failed to query collector database: {e}")
+    
+    # Check if mock data fallback is disabled
+    if DISABLE_MOCK_FALLBACK:
+        logger.error("❌ No real data available and mock data fallback is disabled")
+        raise HTTPException(status_code=503, detail="Real data unavailable and mock data fallback disabled")
+    
+    logger.warning("⚠️ No real data available, generating fallback historical data")
+    
+    # Generate fallback data only as last resort
     now = datetime.now()
     history = []
     
@@ -1641,24 +1695,29 @@ async def get_dashboard_history(
             "temperature": round(22 + random.uniform(-5, 8), 1)
         })
     
-    return {"history": history, "source": "generated"}
+    return {"history": history, "source": "generated", "count": len(history)}
 
 @app.get("/api/dashboard/timeseries")
 async def get_dashboard_timeseries(
     start_time: str = "-24h",
-    resolution: str = "5m",
+    resolution: str = "15m",
     user: dict = Depends(verify_token)
 ):
     """Get time series data for dashboard graphs."""
     logger.info(f"📈 Fetching timeseries data - Start: {start_time}, Resolution: {resolution}")
     
+    # Ensure InfluxDB is connected
+    if not influx_manager.connected:
+        logger.info("🔗 Connecting to InfluxDB...")
+        await influx_manager.connect()
+    
     try:
-        # Try to get data from database
+        # Try to get data from database using the collector's database manager
         from collector.database import db_manager
         timeseries_data = await db_manager.get_timeseries_data(start_time, resolution)
         
         if timeseries_data and len(timeseries_data) > 0:
-            logger.info(f"✅ Retrieved {len(timeseries_data)} real timeseries data points")
+            logger.info(f"✅ Retrieved {len(timeseries_data)} real timeseries data points from database")
             return {
                 "success": True,
                 "data": timeseries_data,
@@ -1666,10 +1725,83 @@ async def get_dashboard_timeseries(
                 "count": len(timeseries_data)
             }
         else:
-            logger.warning("⚠️ No database timeseries data, generating fallback data")
+            logger.warning("⚠️ No database timeseries data found")
             
     except Exception as e:
         logger.error(f"❌ Failed to query database timeseries: {e}")
+    
+    # Try InfluxDB manager as fallback
+    try:
+        # Parse start_time to get hours for query_historical_data
+        if start_time.startswith("-") and start_time.endswith("h"):
+            hours = int(start_time[1:-1])
+        else:
+            hours = 24  # Default
+        
+        # Use direct query approach since query_historical_data has issues
+        if influx_manager.connected and influx_manager.query_api:
+            # Parse resolution for proper aggregation window
+            if resolution.endswith("m"):
+                agg_window = resolution
+            elif resolution.endswith("h"):
+                agg_window = resolution
+            else:
+                agg_window = "15m"  # Default
+            
+            query = f'''
+            from(bucket: "{INFLUXDB_BUCKET}")
+                |> range(start: -{hours}h)
+                |> filter(fn: (r) => r["_measurement"] == "solar_metrics")
+                |> filter(fn: (r) => r["_field"] == "solar_power" or 
+                                   r["_field"] == "battery_soc" or 
+                                   r["_field"] == "load_power")
+                |> aggregateWindow(every: {agg_window}, fn: mean, createEmpty: false)
+                |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+                |> sort(columns: ["_time"])
+            '''
+            
+            result = influx_manager.query_api.query(query=query)
+            
+            if result:
+                timeseries_data = []
+                for table in result:
+                    for record in table.records:
+                        # Ensure consistent timestamp formatting
+                        timestamp = record.get_time()
+                        timeseries_data.append({
+                            "timestamp": timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                            "generation": round(float(record.values.get("solar_power") or 0), 2),
+                            "consumption": round(float(record.values.get("load_power") or 0), 2),  # Use load_power
+                            "battery_soc": round(float(record.values.get("battery_soc") or 0), 1),
+                            "battery_level": round(float(record.values.get("battery_soc") or 0), 1)
+                        })
+                
+                if timeseries_data:
+                    # Sort by timestamp to ensure proper chronological order
+                    timeseries_data.sort(key=lambda x: x["timestamp"])
+                    logger.info(f"✅ Retrieved {len(timeseries_data)} real timeseries data points from InfluxDB")
+                    return {
+                        "success": True,
+                        "data": timeseries_data,
+                        "source": "influxdb",
+                        "count": len(timeseries_data),
+                        "resolution": agg_window,
+                        "time_span": f"{hours}h"
+                    }
+            
+            logger.warning("⚠️ No InfluxDB timeseries data found")
+        else:
+            logger.warning("⚠️ InfluxDB not connected")
+            
+    except Exception as e:
+        logger.error(f"❌ Failed to query InfluxDB timeseries: {e}")
+    
+    # Check if mock data fallback is disabled
+    if DISABLE_MOCK_FALLBACK:
+        logger.error("❌ No real timeseries data available and mock data fallback is disabled")
+        raise HTTPException(status_code=503, detail="Real timeseries data unavailable and mock data fallback disabled")
+        
+    logger.warning("⚠️ Generating fallback timeseries data")
     
     # Generate fallback data
     try:
@@ -1718,7 +1850,7 @@ async def get_dashboard_timeseries(
                 consumption = 1.2 + random.uniform(-0.2, 0.5)
             
             data_points.append({
-                "timestamp": current_dt.isoformat(),
+                "timestamp": current_dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                 "generation": round(generation, 2),
                 "consumption": round(consumption, 2),
                 "battery_soc": round(battery_soc, 1),
@@ -1732,7 +1864,9 @@ async def get_dashboard_timeseries(
             "success": True,
             "data": data_points,
             "source": "generated",
-            "count": len(data_points)
+            "count": len(data_points),
+            "resolution": resolution,
+            "time_span": f"{hours}h"
         }
         
     except Exception as e:

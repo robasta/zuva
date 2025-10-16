@@ -1,0 +1,8 @@
+
+# Environment variables with sensitive data
+.env
+
+# Backup environment files
+.env.backup
+.env.local
+.env.production
