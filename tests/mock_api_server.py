@@ -5,11 +5,26 @@ from aiohttp import web
 from sunsynk.client import SunsynkClient
 
 
+TEST_PUBLIC_KEY = (
+    "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA6yy4V6hvLYraejCCUwsFOANRi0RIH3kxIklnr"
+    "vQdzUKDhdkRWqMIAo3ubXSWQfkVQEs3IzpzytwhYCJv3juEXxUR6BFxClWryIz3fHd6FCRdhU2B7y179v"
+    "Il2ouBNOaYLher4328dixjkEHXf8dIjumDMgp9Lrjn3JNpropKhYoFlAogWZQCzF2L52Vuu3B/rf5Wj0S"
+    "NCAHQBSm75pk6bDKmYBFT3jdcQ15OY23fB+HxON/cLxT8C7ZOf2Tl/4cHhmjAGX6Bj0URnLM+k65/sDpE"
+    "x69NWDNKInvPls8bfNF/+e/LZMAG8bwXI4rVlWOhocdbIedcuHmKqlu/FgnXAiyWpqQlGRHE49GFiFKWB"
+    "coyLvSXlIMYIWmL+vS0Dghym81NU9cc+oByCGFApcY0xjO8qAnF/ZKpzAcURIc8yOW5C8pTdC2dKvY98a"
+    "y50as5W1bXDj3GsPFdHvnjel4lKHWDF8MSitAFLMYysVfyBsFm6+SHnxWr9Se71/jglL+9qC2pQY81kkeH"
+    "mKJgHCRHZ6m52GTNmMtd+fJ2nfFCBUty619uRGE5P0AXJnGDA+21IBgDCyF8tFhxIuIrNoZcWcYTiuvphf"
+    "DkmT8KvEfoaRQGd9U5GxWMQEtiI4Uosn9/cGWAswK+g5qaX45f3CYG/YSHgs8s0u4tuo5bxG/M0aECAwEA"
+    "AQ=="
+)
+
+
 class MockApiServer:
     def __init__(self, aiohttp_client):
         self.aiohttp_client = aiohttp_client
         self.app = web.Application()
-        self.app.router.add_post('/oauth/token', self.login)
+        self.app.router.add_get('/anonymous/publicKey', self.public_key)
+        self.app.router.add_post('/oauth/token/new', self.login)
         self.app.router.add_get('/api/v1/inverters', self.get_inverters)
         self.app.router.add_get('/api/v1/plants', self.get_plants)
         self.app.router.add_get('/api/v1/inverter/grid/1029384756/realtime', self.get_inverter_realtime_grid)
@@ -23,13 +38,27 @@ class MockApiServer:
 
     async def login(self, request):
         request_body = await request.json()
-        success = request_body['username'] == 'myuser'
+        success = request_body['username'] == 'myuser' and request_body['password'] != 'letmein'
         payload = {
             'success': success,
+            'msg': 'Success' if success else 'Invalid username or password',
+            'code': 0 if success else 1,
             'data': {
                 'access_token': 'AT123',
                 'refresh_token': 'RT456'
-            }
+            } if success else None
+        }
+        headers = {
+            'Content-Type': 'application/json'
+        }
+        return web.Response(text=json.dumps(payload), headers=headers)
+
+    async def public_key(self, request):
+        payload = {
+            'success': True,
+            'code': 0,
+            'msg': 'Success',
+            'data': TEST_PUBLIC_KEY
         }
         headers = {
             'Content-Type': 'application/json'

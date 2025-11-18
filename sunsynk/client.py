@@ -1,4 +1,9 @@
+import base64
+import time
+
 import aiohttp
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
 from sunsynk.battery import Battery
 from sunsynk.grid import Grid
@@ -87,23 +92,51 @@ class SunsynkClient:
         return headers
 
     async def login(self):
+        public_key = await self.__fetch_public_key()
+        encrypted_password = base64.b64encode(
+            public_key.encrypt(self.password.encode('utf-8'), padding.PKCS1v15())
+        ).decode('ascii')
+
         payload = {
-            'username': self.username,
-            'password': self.password,
+            'areaCode': 'sunsynk',
+            'client_id': 'csp-web',
             'grant_type': 'password',
-            'client_id': 'csp-web'
+            'password': encrypted_password,
+            'scope': 'all',
+            'source': 'sunsynk',
+            'terminal': 'csp-web',
+            'type': 'ACCOUNT',
+            'username': self.username
         }
-        resp = await self.session.post(self.__url('oauth/token'),
+        resp = await self.session.post(self.__url('oauth/token/new'),
                                        headers={"Content-Type": "application/json"},
                                        timeout=20,
                                        json=payload)
         if resp.status == 200:
             resp_body = await resp.json()
-            if resp_body['success']:
-                self.access_token = resp_body['data']['access_token']
-                self.refresh_token = resp_body['data']['refresh_token']
-                return self
+            if resp_body.get('success') or resp_body.get('msg') == 'Success':
+                data = resp_body.get('data') or {}
+                if data.get('access_token') and data.get('refresh_token'):
+                    self.access_token = data['access_token']
+                    self.refresh_token = data['refresh_token']
+                    return self
         raise InvalidCredentialsException()
+
+    async def __fetch_public_key(self):
+        params = {
+            'clientId': 'csp-web',
+            'source': 'sunsynk',
+            'nonce': str(int(time.time() * 1000))
+        }
+        resp = await self.session.get(self.__url('anonymous/publicKey'), params=params, timeout=20)
+        if resp.status != 200:
+            raise InvalidCredentialsException()
+        payload = await resp.json()
+        key_data = payload.get('data')
+        if not key_data:
+            raise InvalidCredentialsException()
+        pem = f"-----BEGIN PUBLIC KEY-----\n{key_data}\n-----END PUBLIC KEY-----"
+        return load_pem_public_key(pem.encode('ascii'))
 
     def __url(self, path: str) -> str:
         return f'{self.base_url}/{path}'

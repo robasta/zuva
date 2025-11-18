@@ -19,6 +19,7 @@ structlog==23.1.0
 # Utilities
 python-dateutil==2.8.2
 pytz==2023.3
+cryptography==41.0.7
 
 # Development and testing
 pytest==7.4.2
