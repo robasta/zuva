@@ -41,6 +41,47 @@ interface TimeSeriesProps {
 
 type TimeRange = '6h' | '12h' | '24h';
 
+interface MetricConfig {
+  key: keyof TimeSeriesDataPoint;
+  label: string;
+  unit: string;
+  precision: number;
+  color: string;
+  yAxisId: 'power' | 'battery';
+}
+
+const METRICS: MetricConfig[] = [
+  {
+    key: 'generation',
+    label: 'Solar Generation',
+    unit: 'kW',
+    precision: 2,
+    color: '#ff9800',
+    yAxisId: 'power'
+  },
+  {
+    key: 'consumption',
+    label: 'Consumption',
+    unit: 'kW',
+    precision: 2,
+    color: '#9c27b0',
+    yAxisId: 'power'
+  },
+  {
+    key: 'battery_soc',
+    label: 'Battery SOC',
+    unit: '%',
+    precision: 1,
+    color: '#4caf50',
+    yAxisId: 'battery'
+  }
+];
+
+const METRIC_LOOKUP = METRICS.reduce<Record<string, MetricConfig>>((acc, metric) => {
+  acc[metric.key] = metric;
+  return acc;
+}, {});
+
 const TimeSeriesGraph: React.FC<TimeSeriesProps> = ({
   height = 400,
   showControls = true,
@@ -253,57 +294,49 @@ const TimeSeriesGraph: React.FC<TimeSeriesProps> = ({
                       return value?.toString() || '';
                     }
                   }}
-                  formatter={(value: any, _name: string, props: any) => {
-                    const metricConfig: Record<string, { label: string; unit: string; precision: number }> = {
-                      generation: { label: 'Solar Generation', unit: 'kW', precision: 2 },
-                      consumption: { label: 'Consumption', unit: 'kW', precision: 2 },
-                      battery_soc: { label: 'Battery SOC', unit: '%', precision: 1 }
+                  formatter={(value: any, name: string, props: any) => {
+                    const dataKey = String(props?.dataKey ?? name ?? '');
+                    const metric = METRIC_LOOKUP[dataKey] ?? {
+                      label: dataKey,
+                      unit: '',
+                      precision: 2,
+                      color: '#607d8b',
+                      yAxisId: 'power'
                     };
-                    const dataKey = String(props?.dataKey ?? '');
-                    const metric = metricConfig[dataKey] ?? { label: dataKey, unit: '', precision: 2 };
-                    const numericValue = Number(value ?? 0);
-                    const safeValue = Number.isFinite(numericValue) ? numericValue : 0;
+                    const numericValue = typeof value === 'number' ? value : Number(value);
+                    if (!Number.isFinite(numericValue)) {
+                      return ['N/A', metric.label];
+                    }
                     const formattedValue = metric.unit
-                      ? `${safeValue.toFixed(metric.precision)} ${metric.unit}`
-                      : safeValue.toFixed(metric.precision);
+                      ? `${numericValue.toFixed(metric.precision)} ${metric.unit}`
+                      : numericValue.toFixed(metric.precision);
                     return [formattedValue, metric.label];
                   }}
+                  contentStyle={{ borderRadius: 8 }}
+                  cursor={{ strokeDasharray: '4 4' }}
                 />
                 <Legend 
                   verticalAlign="bottom" 
                   height={36}
                   iconType="circle"
+                  formatter={(value: string) => METRIC_LOOKUP[value]?.label ?? value}
                 />
-                <Line 
-                  yAxisId="power"
-                  type="monotone" 
-                  dataKey="generation" 
-                  stroke="transparent" 
-                  strokeWidth={0}
-                  name="Solar Generation"
-                  dot={{ fill: "#ff9800", strokeWidth: 0, r: 4 }}
-                  legendType="circle"
-                />
-                <Line 
-                  yAxisId="power"
-                  type="monotone" 
-                  dataKey="consumption" 
-                  stroke="transparent" 
-                  strokeWidth={0}
-                  name="Consumption"
-                  dot={{ fill: "#9c27b0", strokeWidth: 0, r: 4 }}
-                  legendType="circle"
-                />
-                <Line 
-                  yAxisId="battery"
-                  type="monotone" 
-                  dataKey="battery_soc" 
-                  stroke="transparent" 
-                  strokeWidth={0}
-                  name="Battery SOC"
-                  dot={{ fill: "#4caf50", strokeWidth: 0, r: 4 }}
-                  legendType="circle"
-                />
+                {METRICS.map(metric => (
+                  <Line 
+                    key={metric.key}
+                    yAxisId={metric.yAxisId}
+                    type="monotone"
+                    dataKey={metric.key}
+                    stroke={metric.color}
+                    strokeWidth={2}
+                    strokeOpacity={0}
+                    name={metric.label}
+                    dot={{ fill: metric.color, stroke: metric.color, strokeWidth: 0, r: 4 }}
+                    activeDot={{ r: 6, stroke: metric.color, strokeWidth: 2, fill: '#ffffff' }}
+                    legendType="circle"
+                    connectNulls
+                  />
+                ))}
               </LineChart>
             </ResponsiveContainer>
           ) : (
