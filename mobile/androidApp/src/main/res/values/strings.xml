@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">Sunsynk Dashboard</string>
+    <string name="login_title">Sign in</string>
+    <string name="dashboard_greeting">Welcome to Sunsynk</string>
+    <string name="loading_message">Loading data...</string>
+</resources>
