@@ -1775,16 +1775,50 @@ async def get_dashboard_timeseries(
                             "battery_soc": round(float(record.values.get("battery_soc") or 0), 1),
                             "battery_level": round(float(record.values.get("battery_soc") or 0), 1)
                         })
-                
+
                 if timeseries_data:
-                    # Sort by timestamp to ensure proper chronological order
-                    timeseries_data.sort(key=lambda x: x["timestamp"])
-                    logger.info(f"✅ Retrieved {len(timeseries_data)} real timeseries data points from InfluxDB")
+                    deduplicated: Dict[str, Dict[str, float]] = {}
+                    counts: Dict[str, int] = {}
+
+                    for point in timeseries_data:
+                        key = point["timestamp"]
+                        if key not in deduplicated:
+                            deduplicated[key] = {
+                                "generation": point["generation"],
+                                "consumption": point["consumption"],
+                                "battery_soc": point["battery_soc"],
+                                "battery_level": point["battery_level"]
+                            }
+                            counts[key] = 1
+                        else:
+                            deduplicated[key]["generation"] += point["generation"]
+                            deduplicated[key]["consumption"] += point["consumption"]
+                            deduplicated[key]["battery_soc"] += point["battery_soc"]
+                            deduplicated[key]["battery_level"] += point["battery_level"]
+                            counts[key] += 1
+
+                    aggregated_points = []
+                    for timestamp, values in deduplicated.items():
+                        count = counts[timestamp]
+                        aggregated_points.append({
+                            "timestamp": timestamp,
+                            "generation": round(values["generation"] / count, 2),
+                            "consumption": round(values["consumption"] / count, 2),
+                            "battery_soc": round(values["battery_soc"] / count, 1),
+                            "battery_level": round(values["battery_level"] / count, 1)
+                        })
+
+                    aggregated_points.sort(key=lambda x: x["timestamp"])
+                    logger.info(
+                        "✅ Retrieved %d real timeseries data points from InfluxDB (%d unique)",
+                        len(timeseries_data),
+                        len(aggregated_points)
+                    )
                     return {
                         "success": True,
-                        "data": timeseries_data,
+                        "data": aggregated_points,
                         "source": "influxdb",
-                        "count": len(timeseries_data),
+                        "count": len(aggregated_points),
                         "resolution": agg_window,
                         "time_span": f"{hours}h"
                     }
