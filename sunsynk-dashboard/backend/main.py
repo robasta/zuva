@@ -969,48 +969,58 @@ class AlertManager:
     async def get_recent_alerts(self, hours: int = 24) -> List[dict]:
         """Get recent alerts from database and in-memory cache."""
         try:
-            # Get alerts from database
+            cutoff = datetime.now() - timedelta(hours=hours)
+            db_alerts = []
+
+            # Get alerts from database when available
             if hasattr(self.db_manager, 'get_alerts'):
-                db_alerts = await self.db_manager.get_alerts(hours=hours)
-                return db_alerts
-            else:
-                # Fallback to in-memory alerts
-                cutoff = datetime.now() - timedelta(hours=hours)
-                recent_alerts = []
-                
-                # Include active alerts
-                for alert in self.active_alerts.values():
-                    if alert.timestamp >= cutoff:
-                        recent_alerts.append({
-                            'id': alert.id,
-                            'title': alert.title,
-                            'message': alert.message,
-                            'severity': alert.severity.value,
-                            'status': 'active',
-                            'category': alert.category,
-                            'timestamp': alert.timestamp.isoformat(),
-                            'metadata': alert.metadata
-                        })
-                
-                # Include historical alerts
-                for alert in self.alert_history:
-                    if alert.timestamp >= cutoff:
-                        recent_alerts.append({
-                            'id': alert.id,
-                            'title': alert.title,
-                            'message': alert.message,
-                            'severity': alert.severity.value,
-                            'status': alert.status.value,
-                            'category': alert.category,
-                            'timestamp': alert.timestamp.isoformat(),
-                            'acknowledged_at': alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
-                            'resolved_at': alert.resolved_at.isoformat() if alert.resolved_at else None,
-                            'metadata': alert.metadata
-                        })
-                
-                # Sort by timestamp (most recent first)
-                recent_alerts.sort(key=lambda x: x['timestamp'], reverse=True)
-                return recent_alerts
+                try:
+                    db_alerts = await self.db_manager.get_alerts(hours=hours)
+                except Exception as db_error:
+                    logger.error(f"Error pulling alerts from database: {db_error}")
+                    db_alerts = []
+
+                if db_alerts:
+                    return db_alerts
+
+            # Fallback to in-memory alerts when database is unavailable or empty
+            recent_alerts: Dict[str, dict] = {}
+
+            # Include historical alerts first
+            for alert in self.alert_history:
+                if alert.timestamp >= cutoff:
+                    recent_alerts[alert.id] = {
+                        'id': alert.id,
+                        'title': alert.title,
+                        'message': alert.message,
+                        'severity': alert.severity.value,
+                        'status': alert.status.value,
+                        'category': alert.category,
+                        'timestamp': alert.timestamp.isoformat(),
+                        'acknowledged_at': alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
+                        'resolved_at': alert.resolved_at.isoformat() if alert.resolved_at else None,
+                        'metadata': alert.metadata
+                    }
+
+            # Overlay active alerts to ensure current status wins
+            for alert in self.active_alerts.values():
+                if alert.timestamp >= cutoff:
+                    recent_alerts[alert.id] = {
+                        'id': alert.id,
+                        'title': alert.title,
+                        'message': alert.message,
+                        'severity': alert.severity.value,
+                        'status': 'active',
+                        'category': alert.category,
+                        'timestamp': alert.timestamp.isoformat(),
+                        'acknowledged_at': alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
+                        'resolved_at': alert.resolved_at.isoformat() if alert.resolved_at else None,
+                        'metadata': alert.metadata
+                    }
+
+            # Sort by timestamp (most recent first)
+            alerts_list = sorted(recent_alerts.values(), key=lambda x: x['timestamp'], reverse=True)
+            return alerts_list
         except Exception as e:
             logger.error(f"Error getting recent alerts: {e}")
             return []
