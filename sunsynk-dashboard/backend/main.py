@@ -258,10 +258,12 @@ class InfluxDBManager:
                 .tag("source", "sunsynk") \
                 .tag("inverter_sn", "2305156257") \
                 .field("solar_power", float(metrics_data.get("solar_power", 0))) \
+                .field("battery_soc", float(metrics_data.get("battery_soc", metrics_data.get("battery_level", 0)))) \
                 .field("battery_level", float(metrics_data.get("battery_soc", 0))) \
                 .field("battery_power", float(metrics_data.get("battery_power", 0))) \
                 .field("grid_power", float(metrics_data.get("grid_power", 0))) \
-                .field("consumption", float(metrics_data.get("consumption", 0))) \
+                .field("consumption", float(metrics_data.get("consumption", metrics_data.get("load_power", 0)))) \
+                .field("load_power", float(metrics_data.get("consumption", metrics_data.get("load_power", 0)))) \
                 .field("battery_voltage", float(metrics_data.get("battery_voltage", 0))) \
                 .field("grid_voltage", float(metrics_data.get("grid_voltage", 0))) \
                 .time(metrics_data.get("timestamp", datetime.now()), WritePrecision.S)
@@ -1754,7 +1756,8 @@ async def get_dashboard_timeseries(
                 |> filter(fn: (r) => r["_measurement"] == "solar_metrics")
                 |> filter(fn: (r) => r["_field"] == "solar_power" or 
                                    r["_field"] == "battery_soc" or 
-                                   r["_field"] == "load_power")
+                                   r["_field"] == "load_power" or 
+                                   r["_field"] == "consumption")
                 |> aggregateWindow(every: {agg_window}, fn: mean, createEmpty: false)
                 |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
                 |> sort(columns: ["_time"])
@@ -1771,7 +1774,7 @@ async def get_dashboard_timeseries(
                         timeseries_data.append({
                             "timestamp": timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                             "generation": round(float(record.values.get("solar_power") or 0), 2),
-                            "consumption": round(float(record.values.get("load_power") or 0), 2),  # Use load_power
+                            "consumption": round(float(record.values.get("load_power", record.values.get("consumption", 0)) or 0), 2),
                             "battery_soc": round(float(record.values.get("battery_soc") or 0), 1),
                             "battery_level": round(float(record.values.get("battery_soc") or 0), 1)
                         })

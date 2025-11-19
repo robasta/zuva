@@ -562,7 +562,7 @@ class DatabaseManager:
                 from(bucket: "{self.bucket}")
                 |> range(start: {start_time})
                 |> filter(fn: (r) => r._measurement == "solar_metrics")
-                |> filter(fn: (r) => r._field == "solar_power" or r._field == "load_power" or r._field == "battery_soc")
+                |> filter(fn: (r) => r._field == "solar_power" or r._field == "load_power" or r._field == "consumption" or r._field == "battery_soc")
                 |> aggregateWindow(every: {resolution}, fn: mean, createEmpty: false)
                 |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
                 |> sort(columns: ["_time"])
@@ -576,7 +576,7 @@ class DatabaseManager:
                     data.append({
                         'timestamp': record.get_time().isoformat(),
                         'generation': record.get('solar_power', 0),
-                        'consumption': record.get('load_power', 0),  # Use load_power for consumption
+                        'consumption': record.get('consumption', record.get('load_power', 0)),
                         'battery_soc': record.get('battery_soc', 0),
                         'battery_level': record.get('battery_soc', 0)  # Alias for compatibility
                     })
