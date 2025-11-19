@@ -2,6 +2,7 @@ package com.sunsynk.mobile.shared.network.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 @Serializable
 data class DashboardMetrics(
@@ -25,10 +26,14 @@ data class DashboardStatus(
 
 @Serializable
 data class WeatherForecastEntry(
-    val timestamp: String,
+    @SerialName("timestamp") val timestamp: String? = null,
+    @SerialName("time") val time: String? = null,
     val condition: String? = null,
     val temperature: Double? = null
-)
+) {
+    @Transient
+    val resolvedTimestamp: String? = timestamp ?: time
+}
 
 @Serializable
 data class DashboardCurrentResponse(

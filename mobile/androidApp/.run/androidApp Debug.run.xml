@@ -1,0 +1,13 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="androidApp Debug" type="AndroidRunConfigurationType" factoryName="Android App">
+    <module name="androidApp" />
+    <option name="DEPLOY" value="true" />
+    <option name="ARTIFACT_NAME" value="androidApp" />
+    <option name="MODE" value="default_activity" />
+    <option name="TARGET_SELECTION_MODE" value="SHOW_DIALOG" />
+    <option name="USE_LAST_SELECTED_DEVICE" value="true" />
+    <option name="CLEAR_LOGCAT" value="false" />
+    <option name="SHOW_LOGCAT_AUTOMATICALLY" value="false" />
+    <option name="SKIP_NOOP_APKS" value="true" />
+  </configuration>
+</component>

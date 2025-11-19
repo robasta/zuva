@@ -5,7 +5,13 @@ plugins {
 }
 
 kotlin {
-    androidTarget()
+    androidTarget {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
+
+    jvmToolchain(17)
 
     listOf(
         iosX64(),
@@ -23,6 +29,7 @@ kotlin {
         val ktorVersion = "2.3.10"
         val serializationVersion = "1.6.3"
         val koinVersion = "3.5.6"
+        val datetimeVersion = "0.6.0"
 
         val commonMain by getting {
             dependencies {
@@ -35,18 +42,21 @@ kotlin {
                 implementation("io.ktor:ktor-client-websockets:$ktorVersion")
                 implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
                 api("io.insert-koin:koin-core:$koinVersion")
+                implementation("org.jetbrains.kotlinx:kotlinx-datetime:$datetimeVersion")
             }
         }
         val commonTest by getting {
             dependencies {
                 implementation(kotlin("test"))
                 implementation("io.ktor:ktor-client-mock:$ktorVersion")
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:$coroutinesVersion")
             }
         }
         val androidMain by getting {
             dependencies {
                 implementation("io.ktor:ktor-client-okhttp:$ktorVersion")
                 implementation("io.insert-koin:koin-android:$koinVersion")
+                implementation("org.slf4j:slf4j-android:1.7.36")
             }
         }
         val androidUnitTest by getting

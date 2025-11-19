@@ -23,7 +23,9 @@ import com.sunsynk.mobile.shared.util.ApiResult.Success
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.HttpRequestTimeoutException
+import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -33,18 +35,14 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.websocket.Frame
-import io.ktor.websocket.WebSocketSession
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
-import io.ktor.websocket.webSocket
-import kotlinx.coroutines.channels.receive
-import kotlinx.coroutines.channels.send
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
-import kotlinx.serialization.json.parseToJsonElement
 import kotlinx.serialization.json.jsonObject
 
 class SunsynkApiClient(
@@ -115,37 +113,45 @@ class SunsynkApiClient(
     }
 
     fun observeAlerts(): Flow<ApiResult<AlertNotification>> = channelFlow {
-        val token = tokenProvider()
-        if (token == null) {
-            trySend(Error("Missing auth token for WebSocket connection"))
-            close()
-            return@channelFlow
-        }
-
         val json = Json { ignoreUnknownKeys = true }
+        var attempt = 0
 
-        try {
-            httpClient.webSocket(urlString = config.websocketUrl, request = {
-                header(HttpHeaders.Authorization, "Bearer $token")
-            }) {
-                try {
-                    while (isActive) {
-                        when (val frame = incoming.receive()) {
-                            is Frame.Text -> {
-                                val payload = json.parseToJsonElement(frame.readText())
-                                val data = json.decodeFromJsonElement<AlertNotification>(payload)
-                                this@channelFlow.send(Success(data))
-                            }
-                            is Frame.Close -> return@webSocket
-                            else -> Unit
-                        }
-                    }
-                } finally {
-                    close()
-                }
+        while (isActive) {
+            val token = tokenProvider()
+            if (token == null) {
+                trySend(Error("Missing auth token for WebSocket connection"))
+                close()
+                return@channelFlow
             }
-        } catch (e: Exception) {
-            trySend(Error("WebSocket connection failed", e))
+
+            try {
+                httpClient.webSocket(urlString = config.websocketUrl, request = {
+                    header(HttpHeaders.Authorization, "Bearer $token")
+                }) {
+                    attempt = 0
+                    try {
+                        while (isActive) {
+                            when (val frame = incoming.receive()) {
+                                is Frame.Text -> {
+                                    val payload = Json.parseToJsonElement(frame.readText())
+                                    val data = json.decodeFromJsonElement<AlertNotification>(payload)
+                                    this@channelFlow.send(Success(data))
+                                }
+                                is Frame.Close -> return@webSocket
+                                else -> Unit
+                            }
+                        }
+                    } finally {
+                        close()
+                    }
+                }
+            } catch (e: Exception) {
+                attempt += 1
+                val delayMillis = (WEBSOCKET_BASE_DELAY_MS * (1 shl (attempt - 1))).coerceAtMost(WEBSOCKET_MAX_DELAY_MS)
+                trySend(Error("WebSocket connection failed", e))
+                if (!isActive) break
+                kotlinx.coroutines.delay(delayMillis)
+            }
         }
     }
 
@@ -159,9 +165,9 @@ class SunsynkApiClient(
         }
     }
 
-    private suspend inline fun <reified T, reified P : Any> authorizedPost(
+    private suspend inline fun <reified T> authorizedPost(
         endpoint: String,
-        payload: P? = null,
+        payload: Any? = null,
         crossinline configBlock: io.ktor.client.request.HttpRequestBuilder.() -> Unit = {}
     ): ApiResult<T> = safeRequest {
         httpClient.post("${config.baseUrl}$endpoint") {
@@ -199,3 +205,6 @@ class SunsynkApiClient(
     }
 
 }
+
+private const val WEBSOCKET_BASE_DELAY_MS = 2_000L
+private const val WEBSOCKET_MAX_DELAY_MS = 60_000L

@@ -62,9 +62,10 @@ Design and implement an Android application that mirrors the Sunsynk dashboard f
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
 | TASK-012 | Implement offline caching (Room + shared repository cache) for metrics/alerts with 24-hour retention and sync conflict resolution. |  |  |
-| TASK-013 | Build instrumentation tests (Espresso/Compose testing) and shared unit tests to cover networking, caching, and alert workflows. |  |  |
-| TASK-014 | Profile WebSocket handling under poor connectivity; add exponential backoff and foreground service guard for long-lived connections. |  |  |
-| TASK-015 | Create multiplatform rollout guide in `docs/mobile/multiplatform-strategy.md` covering iOS/Huawei targets, KMP module reuse, and Flutter/Compose evaluation. |  |  |
+| TASK-012 | Implement offline caching (Room + shared repository cache) for metrics/alerts with 24-hour retention and sync conflict resolution. | ✅ | 2025-11-18 |
+| TASK-013 | Build instrumentation tests (Espresso/Compose testing) and shared unit tests to cover networking, caching, and alert workflows. | ✅ (shared unit tests) | 2025-11-18 |
+| TASK-014 | Profile WebSocket handling under poor connectivity; add exponential backoff and foreground service guard for long-lived connections. | ✅ | 2025-11-18 |
+| TASK-015 | Create multiplatform rollout guide in `docs/mobile/multiplatform-strategy.md` covering iOS/Huawei targets, KMP module reuse, and Flutter/Compose evaluation. | ✅ | 2025-11-18 |
 | TASK-016 | Prepare release assets (Play Store listing, signed bundles) and document CI/CD pipeline (GitHub Actions) for build/test/deploy. |  |  |
 
 ## 3. Alternatives
