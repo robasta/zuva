@@ -6,28 +6,28 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import pytest_asyncio
 
 # Ensure backend package imports resolve when tests execute from repo root
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from backend.main import Alert, AlertManager, AlertSeverity, AlertStatus
+from backend.main import Alert, AlertManager, AlertSeverity, AlertStatus, NotificationChannel
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def alert_manager():
     """Provide an AlertManager with database interactions mocked out."""
-    with patch("backend.main.db_manager", autospec=True) as mock_db:
-        # Provide a clean db_manager stub with awaited methods
-        mock_db.get_alerts = AsyncMock(return_value=[])
-        mock_db.get_active_alerts = AsyncMock(return_value=[])
-        mock_db.write_alert = AsyncMock(return_value=True)
-        mock_db.update_alert_status = AsyncMock(return_value=True)
+    manager = AlertManager()
+    mock_db = MagicMock()
+    mock_db.get_alerts = AsyncMock(return_value=[])
+    mock_db.get_active_alerts = AsyncMock(return_value=[])
+    mock_db.write_alert = AsyncMock(return_value=True)
+    mock_db.update_alert_status = AsyncMock(return_value=True)
 
-        manager = AlertManager()
-        # Replace newly created manager db dependency with our stub
-        manager.db_manager = mock_db
-        manager.AlertData = MagicMock()
-        yield manager
+    manager.db_manager = mock_db
+    manager.AlertData = MagicMock()
+    manager.save_alert_to_db = AsyncMock(return_value=True)
+    yield manager
 
 
 @pytest.mark.asyncio
@@ -123,4 +123,59 @@ async def test_get_recent_alerts_deduplicates_memory(alert_manager):
     assert alert_payload["id"] == "dup-id"
     assert alert_payload["status"] == "active"
     assert alert_payload["metadata"]["source"] == "active"
-*** End Patch
+
+
+@pytest.mark.asyncio
+async def test_notifications_suppressed_during_cooldown(alert_manager):
+    """Alerts should be recorded but not sent while cooldown is active."""
+    category = "battery_low"
+    now = datetime.now()
+    alert = Alert(
+        id="cooldown-id",
+        title="Battery low",
+        message="Low battery",
+        severity=AlertSeverity.CRITICAL,
+        status=AlertStatus.ACTIVE,
+        category=category,
+        timestamp=now,
+        metadata={}
+    )
+    previous_send = now - timedelta(minutes=5)
+    alert_manager.last_notification_times[category] = previous_send
+    alert_manager.category_cooldowns[category] = timedelta(minutes=30)
+    alert_manager.notification_preferences.enabled_channels = [NotificationChannel.PUSH]
+
+    with patch.object(alert_manager, "_send_to_channel", new_callable=AsyncMock) as send_mock:
+        await alert_manager._send_notifications(alert)
+
+    send_mock.assert_not_called()
+    assert alert.metadata.get("suppressed_reason") == "cooldown"
+    assert "suppressed_until" in alert.metadata
+    assert alert_manager.last_notification_times[category] == previous_send
+
+
+@pytest.mark.asyncio
+async def test_notifications_resume_after_cooldown(alert_manager):
+    """Notifications should be sent once the cooldown window expires."""
+    category = "battery_low"
+    alert = Alert(
+        id="send-id",
+        title="Battery low",
+        message="Low battery",
+        severity=AlertSeverity.CRITICAL,
+        status=AlertStatus.ACTIVE,
+        category=category,
+        timestamp=datetime.now(),
+        metadata={}
+    )
+    previous_send = datetime.now() - timedelta(minutes=45)
+    alert_manager.last_notification_times[category] = previous_send
+    alert_manager.category_cooldowns[category] = timedelta(minutes=30)
+    alert_manager.notification_preferences.enabled_channels = [NotificationChannel.PUSH]
+
+    with patch.object(alert_manager, "_send_to_channel", new_callable=AsyncMock) as send_mock:
+        await alert_manager._send_notifications(alert)
+
+    send_mock.assert_awaited()
+    assert "suppressed_reason" not in alert.metadata
+    assert alert_manager.last_notification_times[category] >= alert.timestamp

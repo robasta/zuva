@@ -9,7 +9,8 @@ import sys
 import asyncio
 import json
 import logging
-from typing import Dict, Any, List, Optional
+import re
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,6 +19,7 @@ import pandas as pd
 import numpy as np
 import psutil
 import shutil
+import yaml
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 
@@ -80,6 +82,18 @@ INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "T72osJpuV_vwsv-8bHauVAjO5R_-HgTJM3
 INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "sunsynk")
 INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "solar_metrics")
 
+# Notification Cooldown Configuration
+try:
+    ALERT_COOLDOWN_MINUTES = float(os.getenv("ALERT_COOLDOWN_MINUTES", "20"))
+except ValueError:
+    logger.warning("Invalid ALERT_COOLDOWN_MINUTES value, defaulting to 20 minutes")
+    ALERT_COOLDOWN_MINUTES = 20.0
+ALERT_COOLDOWN_OVERRIDES = os.getenv("ALERT_COOLDOWN_OVERRIDES")
+ALERT_CONFIG_PATHS = [
+    Path("/app/config/alerts.yaml"),
+    Path(__file__).resolve().parent.parent / "config" / "alerts.yaml",
+]
+
 # Security
 security = HTTPBearer()
 
@@ -91,6 +105,55 @@ def hash_password(password: str) -> str:
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return hash_password(plain_password) == hashed_password
+
+
+def _parse_duration_to_timedelta(value: Any, fallback_minutes: float = 20.0) -> timedelta:
+    """Convert various duration formats into a timedelta."""
+    try:
+        if value is None:
+            return timedelta(minutes=fallback_minutes)
+
+        if isinstance(value, timedelta):
+            return value
+
+        if isinstance(value, (int, float)):
+            minutes = float(value)
+            if minutes <= 0:
+                raise ValueError("Duration must be positive")
+            return timedelta(minutes=minutes)
+
+        if isinstance(value, str):
+            raw = value.strip().lower()
+            if not raw:
+                raise ValueError("Blank duration string")
+
+            patterns = [
+                (r"^(?P<value>\d+(?:\.\d+)?)\s*(?:m|min|minute|minutes)$", "minutes"),
+                (r"^(?P<value>\d+(?:\.\d+)?)\s*(?:h|hr|hour|hours)$", "hours"),
+                (r"^(?P<value>\d+(?:\.\d+)?)\s*(?:s|sec|second|seconds)$", "seconds"),
+            ]
+
+            for pattern, unit in patterns:
+                match = re.match(pattern, raw)
+                if match:
+                    numeric_value = float(match.group("value"))
+                    if unit == "minutes":
+                        return timedelta(minutes=numeric_value)
+                    if unit == "hours":
+                        return timedelta(hours=numeric_value)
+                    if unit == "seconds":
+                        return timedelta(seconds=numeric_value)
+
+            # Allow bare numbers to default to minutes
+            numeric_value = float(raw)
+            if numeric_value <= 0:
+                raise ValueError("Duration must be positive")
+            return timedelta(minutes=numeric_value)
+
+    except Exception as exc:
+        logger.warning(f"Invalid cooldown duration '{value}': {exc}. Falling back to {fallback_minutes} minutes.")
+
+    return timedelta(minutes=fallback_minutes)
 
 # Demo users
 DEMO_USERS = {
@@ -748,6 +811,12 @@ class AlertManager:
         self.notification_preferences = NotificationPreferences(
             enabled_channels=[NotificationChannel.PUSH, NotificationChannel.EMAIL]
         )
+        base_cooldown_minutes = max(
+            ALERT_COOLDOWN_MINUTES,
+            max(60 / self.notification_preferences.max_notifications_per_hour, 1)
+        )
+        self.default_cooldown: timedelta = timedelta(minutes=base_cooldown_minutes)
+        self.category_cooldowns: Dict[str, timedelta] = self._load_cooldown_overrides()
         
         # Database connection for alert persistence
         from collector.database import db_manager, AlertData
@@ -761,6 +830,75 @@ class AlertManager:
             self.intelligent_monitor = IntelligentAlertMonitor()
             logger.info("Intelligent Alert System initialized")
     
+    def _load_cooldown_overrides(self) -> Dict[str, timedelta]:
+        overrides: Dict[str, timedelta] = {}
+
+        # Environment variable overrides take precedence
+        overrides.update(self._parse_env_cooldowns())
+
+        # File-based overrides may update default and category-specific cooldowns
+        file_overrides = self._parse_yaml_cooldowns()
+        overrides.update(file_overrides)
+
+        return overrides
+
+    def _parse_env_cooldowns(self) -> Dict[str, timedelta]:
+        if not ALERT_COOLDOWN_OVERRIDES:
+            return {}
+
+        try:
+            data = json.loads(ALERT_COOLDOWN_OVERRIDES)
+            overrides = {}
+            for category, duration in data.items():
+                overrides[category] = _parse_duration_to_timedelta(duration, self.default_cooldown.total_seconds() / 60)
+            return overrides
+        except json.JSONDecodeError as exc:
+            logger.warning(f"Failed to parse ALERT_COOLDOWN_OVERRIDES JSON: {exc}")
+            return {}
+
+    def _parse_yaml_cooldowns(self) -> Dict[str, timedelta]:
+        overrides: Dict[str, timedelta] = {}
+
+        for path in ALERT_CONFIG_PATHS:
+            if not path.exists():
+                continue
+
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    config_data = yaml.safe_load(handle) or {}
+
+                global_settings = config_data.get("global", {})
+                if isinstance(global_settings, dict) and global_settings.get("default_cooldown"):
+                    self.default_cooldown = _parse_duration_to_timedelta(
+                        global_settings["default_cooldown"],
+                        self.default_cooldown.total_seconds() / 60
+                    )
+
+                for section, section_data in config_data.items():
+                    if section == "global" or not isinstance(section_data, dict):
+                        continue
+
+                    for alert_key, alert_config in section_data.items():
+                        if not isinstance(alert_config, dict):
+                            continue
+                        if "cooldown" not in alert_config:
+                            continue
+                        overrides[alert_key] = _parse_duration_to_timedelta(
+                            alert_config["cooldown"],
+                            self.default_cooldown.total_seconds() / 60
+                        )
+
+                # Stop after the first existing file to avoid conflicting defaults
+                break
+
+            except Exception as exc:
+                logger.warning(f"Unable to parse alert config at {path}: {exc}")
+
+        return overrides
+
+    def _get_cooldown_for_category(self, category: str) -> timedelta:
+        return self.category_cooldowns.get(category, self.default_cooldown)
+
     async def initialize(self):
         """Initialize alert manager and load existing alerts from database."""
         try:
@@ -1024,6 +1162,12 @@ class AlertManager:
         except Exception as e:
             logger.error(f"Error getting recent alerts: {e}")
             return []
+
+    def _record_cooldown_suppression(self, alert: Alert, next_allowed: datetime) -> None:
+        alert.metadata = alert.metadata or {}
+        alert.metadata["suppressed_reason"] = "cooldown"
+        alert.metadata["suppressed_until"] = next_allowed.isoformat()
+        asyncio.create_task(self.save_alert_to_db(alert))
     
     async def _send_notifications(self, alert: Alert):
         try:
@@ -1033,8 +1177,14 @@ class AlertManager:
                 return
             
             # Rate limiting
-            if self._is_rate_limited(alert.category):
-                logger.info(f"🚫 Rate limited notification: {alert.category}")
+            rate_limited, next_allowed = self._is_rate_limited(alert.category)
+            if rate_limited:
+                logger.info(
+                    f"🚫 Cooldown active for category '{alert.category}' "
+                    f"until {next_allowed.isoformat()} — suppressing outbound notifications"
+                )
+                if next_allowed:
+                    self._record_cooldown_suppression(alert, next_allowed)
                 return
             
             # Send to enabled channels
@@ -1062,13 +1212,14 @@ class AlertManager:
         else:  # Spans midnight
             return now >= quiet_start or now <= quiet_end
     
-    def _is_rate_limited(self, category: str) -> bool:
-        if category not in self.last_notification_times:
-            return False
-        
-        last_time = self.last_notification_times[category]
-        min_interval = timedelta(minutes=60 / self.notification_preferences.max_notifications_per_hour)
-        return datetime.now() - last_time < min_interval
+    def _is_rate_limited(self, category: str) -> Tuple[bool, Optional[datetime]]:
+        last_time = self.last_notification_times.get(category)
+        if not last_time:
+            return False, None
+
+        cooldown = self._get_cooldown_for_category(category)
+        next_allowed = last_time + cooldown
+        return datetime.now() < next_allowed, next_allowed
     
     async def _send_to_channel(self, alert: Alert, channel: NotificationChannel):
         try:

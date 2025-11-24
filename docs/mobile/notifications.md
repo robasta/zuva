@@ -14,6 +14,8 @@ This document records the notification pipeline for the Sunsynk dashboard mobile
 | Quiet hours & rate limiting | ✅ `_is_quiet_hours` and `_is_rate_limited` enforce notification throttling. |
 | Test alert generator | ✅ `/api/alerts/test` endpoint triggers full pipeline for QA.
 
+**Cooldown behavior (2025-11):** the backend enforces a configurable `ALERT_COOLDOWN_MINUTES` (default 20) plus optional per-category overrides sourced from `ALERT_COOLDOWN_OVERRIDES` or `config/alerts.yaml`. When a duplicate alert arrives inside the window it is still written to the database, but outbound channels are skipped and the metadata is annotated with `suppressed_reason="cooldown"` and `suppressed_until=<ISO8601>`. Mobile clients should surface the suppressed alerts distinctly if they are fetched through `/api/alerts`.
+
 Mobile clients will rely on the WebSocket push channel for near real-time alerts. Additional push transport (FCM/Huawei Push Kit) can be layered later by reusing the existing alert creation hooks.
 
 ## 2. Mobile Notification Flow

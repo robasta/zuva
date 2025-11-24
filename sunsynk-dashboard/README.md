@@ -201,6 +201,12 @@ alerts:
 - **System**: Grid outages, inverter offline
 - **Time-based**: Conditional alerts based on time of day
 
+### Cooldown Control
+- `ALERT_COOLDOWN_MINUTES` defines the global "no-repeat" window (default 20 minutes). Alerts are still persisted but outbound delivery is skipped until this window expires.
+- `ALERT_COOLDOWN_OVERRIDES` accepts a JSON map (e.g. `{ "battery_low": "45min" }`) for category-specific timing without rebuilding the container.
+- `config/alerts.yaml` cooldown entries automatically override the defaults when the backend boots. Keep the category names in sync with what `AlertManager.create_alert()` emits.
+- Suppressed alerts are tagged with `suppressed_reason=cooldown` in their metadata so analytics and UI layers can display the skipped events.
+
 ## Monitoring & Maintenance
 
 ### Health Checks
