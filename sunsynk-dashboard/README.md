@@ -1,4 +1,46 @@
-# Sunsynk Solar Dashboard & Notification System
+# Sunsynk Notification Service
+
+Simple notification system for Sunsynk solar inverter alerts via Telegram and WhatsApp.
+
+## Quick Start
+
+```bash
+# 1. Configure environment
+cp .env.template .env
+# Edit .env with your credentials
+
+# 2. Start services
+docker-compose up -d
+
+# 3. Check status
+docker-compose ps
+docker-compose logs -f
+```
+
+## Services
+
+- **influxdb**: Data storage (port 8086)
+- **notification-api**: REST API for notifications (port 8000)
+- **alert-monitor**: Monitors inverter and triggers alerts
+
+## Configuration
+
+See parent README.md for detailed configuration instructions.
+
+## Testing Notifications
+
+```bash
+# Send a test alert
+curl -X POST http://localhost:8000/alert?user_id=default \
+  -H "Content-Type: application/json" \
+  -d '{
+    "category": "system_error",
+    "severity": "high",
+    "title": "Test Alert",
+    "message": "This is a test notification",
+    "metadata": {"test": true}
+  }'
+``` & Notification System
 
 A comprehensive solar monitoring system that transforms the Sunsynk API client into a real-time dashboard with intelligent notifications, consumption analytics, and mobile integration. Designed to run on Raspberry Pi with 24/7 monitoring capabilities.
 

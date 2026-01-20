@@ -1,353 +1,78 @@
 services:
-  # InfluxDB - Time-series database
+  # InfluxDB for data storage
   influxdb:
-    image: influxdb:2.7-alpine
+    image: influxdb:2.7
     container_name: sunsynk-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD}
-      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG}
-      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET}
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_ADMIN_TOKEN}
-    ports:
-      - "8086:8086"
+      - DOCKER_INFLUXDB_INIT_PASSWORD=sunsynk-admin-password
+      - DOCKER_INFLUXDB_INIT_ORG=sunsynk
+      - DOCKER_INFLUXDB_INIT_BUCKET=solar_data
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=sunsynk-token
     volumes:
       - influxdb_data:/var/lib/influxdb2
       - influxdb_config:/etc/influxdb2
     networks:
       - sunsynk-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "influx", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
 
-  # Data Collector - Phase 1 & 2 Analytics
-  data-collector:
+  # Notification API Service
+  notification-api:
     build:
       context: .
-      dockerfile: collector/Dockerfile
-    container_name: sunsynk-collector
-    environment:
-      - SUNSYNK_USERNAME=${SUNSYNK_USERNAME}
-      - SUNSYNK_PASSWORD=${SUNSYNK_PASSWORD}
-      - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY}
-      - LOCATION=${LOCATION}
-      - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=${INFLUXDB_ADMIN_TOKEN}
-      - INFLUXDB_ORG=${INFLUXDB_ORG}
-      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET}
-      - COLLECTION_INTERVAL=${COLLECTION_INTERVAL}
-      - ANALYSIS_INTERVAL=${ANALYSIS_INTERVAL}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - USE_MOCK_DATA=${USE_MOCK_DATA}
-      - DISABLE_MOCK_FALLBACK=${DISABLE_MOCK_FALLBACK}
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    volumes:
-      - ./collector:/app/collector
-      - ./analytics:/app/analytics
-      - ../sunsynk:/app/sunsynk
-      - ./logs:/app/logs
-    networks:
-      - sunsynk-network
+      dockerfile: notification_service/Dockerfile
+    container_name: sunsynk-notification-api
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "print('collector healthy')"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-
-  # Backend API - Phase 3 FastAPI with WebSocket
-  dashboard-api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: sunsynk-backend
-    environment:
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
-      - SUNSYNK_USERNAME=${SUNSYNK_USERNAME}
-      - SUNSYNK_PASSWORD=${SUNSYNK_PASSWORD}
-      - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY}
-      - LOCATION=${LOCATION}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
-      - CORS_ORIGINS=${CORS_ORIGINS}
-      - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=${INFLUXDB_ADMIN_TOKEN}
-      - INFLUXDB_ORG=${INFLUXDB_ORG}
-      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - ML_MODEL_TRAINING_INTERVAL=${ML_MODEL_TRAINING_INTERVAL}
-      - PREDICTION_CONFIDENCE_THRESHOLD=${PREDICTION_CONFIDENCE_THRESHOLD}
-      - OPTIMIZATION_HORIZON_HOURS=${OPTIMIZATION_HORIZON_HOURS}
-      - BATTERY_CAPACITY_KWH=${BATTERY_CAPACITY_KWH}
-      - INVERTER_CAPACITY_KW=${INVERTER_CAPACITY_KW}
-      - INVERTER_EFFICIENCY=${INVERTER_EFFICIENCY}
-      - USE_MOCK_DATA=${USE_MOCK_DATA}
-      - DISABLE_MOCK_FALLBACK=${DISABLE_MOCK_FALLBACK}
     ports:
       - "8000:8000"
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    volumes:
-      - ./backend:/app
-      - ./collector:/app/collector
-      - ./analytics:/app/analytics
-      - ../sunsynk:/app/sunsynk
-      - ./logs:/app/logs
-      # Persistent application data
-      - app_data:/app/data
-      - alert_configs:/app/config/alerts
-      - system_settings:/app/config/settings
-    networks:
-      - sunsynk-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-
-  # Frontend - Phase 3 React Dashboard
-  web-dashboard:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: sunsynk-frontend
     environment:
-      - REACT_APP_API_URL=${REACT_APP_API_URL}
-      - REACT_APP_WS_URL=${REACT_APP_WS_URL}
-    ports:
-      - "3000:80"
-    depends_on:
-      - dashboard-api
-    networks:
-      - sunsynk-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Nginx Reverse Proxy (Production)
-  nginx:
-    image: nginx:alpine
-    container_name: sunsynk-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro
-    depends_on:
-      - web-dashboard
-      - dashboard-api
-    networks:
-      - sunsynk-network
-    restart: unless-stopped
-    profiles:
-      - production
-
-  # Grafana - Advanced Monitoring (Optional)
-  grafana:
-    image: grafana/grafana:latest
-    container_name: sunsynk-grafana
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
-    ports:
-      - "3001:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
-    depends_on:
-      - influxdb
-    networks:
-      - sunsynk-network
-    restart: unless-stopped
-    profiles:
-      - monitoring
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-
-  # Prometheus - Metrics Collection
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: sunsynk-prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
-      - '--web.enable-lifecycle'
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus:/etc/prometheus
-      - prometheus_data:/prometheus
-    networks:
-      - sunsynk-network
-    restart: unless-stopped
-    profiles:
-      - monitoring
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-
-  # Node Exporter - System Metrics
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: sunsynk-node-exporter
-    command:
-      - '--path.procfs=/host/proc'
-      - '--path.rootfs=/rootfs'
-      - '--path.sysfs=/host/sys'
-      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
-    ports:
-      - "9100:9100"
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    networks:
-      - sunsynk-network
-    restart: unless-stopped
-    profiles:
-      - monitoring
-
-  # Alertmanager - Alert Management
-  alertmanager:
-    image: prom/alertmanager:latest
-    container_name: sunsynk-alertmanager
-    command:
-      - '--config.file=/etc/alertmanager/config.yml'
-      - '--storage.path=/alertmanager'
-    ports:
-      - "9093:9093"
-    volumes:
-      - ./monitoring/alertmanager:/etc/alertmanager
-      - alertmanager_data:/alertmanager
-    networks:
-      - sunsynk-network
-    restart: unless-stopped
-    profiles:
-      - monitoring
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9093/"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-
-  # Log Aggregation - Loki
-  loki:
-    image: grafana/loki:latest
-    container_name: sunsynk-loki
-    command: -config.file=/etc/loki/local-config.yaml
-    ports:
-      - "3100:3100"
-    volumes:
-      - ./monitoring/loki:/etc/loki
-      - loki_data:/loki
-    networks:
-      - sunsynk-network
-    restart: unless-stopped
-    profiles:
-      - monitoring
-
-  # Log Shipping - Promtail
-  promtail:
-    image: grafana/promtail:latest
-    container_name: sunsynk-promtail
-    command: -config.file=/etc/promtail/config.yml
-    volumes:
-      - ./monitoring/promtail:/etc/promtail
-      - ./logs:/var/log/sunsynk:ro
-      - /var/log:/var/log:ro
-    networks:
-      - sunsynk-network
-    restart: unless-stopped
-    profiles:
-      - monitoring
-
-  # Backup Service
-  backup:
-    build:
-      context: ./scripts
-      dockerfile: Dockerfile.backup
-    container_name: sunsynk-backup
-    environment:
-      - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-0 2 * * *}  # Daily at 2 AM
-      - RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
       - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=${INFLUXDB_ADMIN_TOKEN}
-      - INFLUXDB_ORG=${INFLUXDB_ORG:-sunsynk}
-    volumes:
-      - ./backups:/app/backups
-      - influxdb_data:/data/influxdb:ro
+      - INFLUXDB_TOKEN=sunsynk-token
+      - INFLUXDB_ORG=sunsynk
+      - INFLUXDB_BUCKET=solar_data
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_WHATSAPP_FROM=${TWILIO_WHATSAPP_FROM:-whatsapp:+14155238886}
     depends_on:
       - influxdb
     networks:
       - sunsynk-network
-    restart: unless-stopped
-    profiles:
-      - production
 
-  # Watchtower - Auto Updates
-  watchtower:
-    image: containrrr/watchtower
-    container_name: sunsynk-watchtower
+  # Alert Monitor Service
+  alert-monitor:
+    build:
+      context: ..
+      dockerfile: sunsynk-dashboard/collector/Dockerfile
+    container_name: sunsynk-alert-monitor
+    restart: unless-stopped
     environment:
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_SCHEDULE=0 4 * * *  # Daily at 4 AM
-      - WATCHTOWER_NOTIFICATIONS=email
-      - WATCHTOWER_NOTIFICATION_EMAIL_FROM=${EMAIL_FROM}
-      - WATCHTOWER_NOTIFICATION_EMAIL_TO=${EMAIL_TO}
+      - SUNSYNK_USERNAME=${SUNSYNK_USERNAME}
+      - SUNSYNK_PASSWORD=${SUNSYNK_PASSWORD}
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=sunsynk-token
+      - INFLUXDB_ORG=sunsynk
+      - INFLUXDB_BUCKET=solar_data
+      - NOTIFICATION_API_URL=http://notification-api:8000
+      - POLL_INTERVAL=${POLL_INTERVAL:-60}
+      - BATTERY_LOW_THRESHOLD=${BATTERY_LOW_THRESHOLD:-20}
+      - BATTERY_CRITICAL_THRESHOLD=${BATTERY_CRITICAL_THRESHOLD:-10}
+      - HIGH_CONSUMPTION_THRESHOLD=${HIGH_CONSUMPTION_THRESHOLD:-5}
+    depends_on:
+      - influxdb
+      - notification-api
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ../sunsynk:/app/sunsynk
     networks:
       - sunsynk-network
-    restart: unless-stopped
-    profiles:
-      - production
-
-volumes:
-  influxdb_data:
-    driver: local
-  influxdb_config:
-    driver: local
-  grafana_data:
-    driver: local
-  prometheus_data:
-    driver: local
-  alertmanager_data:
-    driver: local
-  loki_data:
-    driver: local
-  # Application persistent storage
-  app_data:
-    driver: local
-  alert_configs:
-    driver: local
-  system_settings:
-    driver: local
 
 networks:
   sunsynk-network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
+
+volumes:
+  influxdb_data:
+  influxdb_config:

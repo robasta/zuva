@@ -108,18 +108,25 @@ class SunsynkClient:
             'type': 'ACCOUNT',
             'username': self.username
         }
+        print(f"Login request - username: {self.username}")
         resp = await self.session.post(self.__url('oauth/token/new'),
                                        headers={"Content-Type": "application/json"},
                                        timeout=20,
                                        json=payload)
+        print(f"Login response status: {resp.status}")
         if resp.status == 200:
             resp_body = await resp.json()
+            print(f"Login response body: {resp_body}")
             if resp_body.get('success') or resp_body.get('msg') == 'Success':
                 data = resp_body.get('data') or {}
                 if data.get('access_token') and data.get('refresh_token'):
                     self.access_token = data['access_token']
                     self.refresh_token = data['refresh_token']
+                    print("✅ Login successful")
                     return self
+        else:
+            text = await resp.text()
+            print(f"Login failed - status {resp.status}: {text[:500]}")
         raise InvalidCredentialsException()
 
     async def __fetch_public_key(self):
@@ -130,13 +137,34 @@ class SunsynkClient:
         }
         resp = await self.session.get(self.__url('anonymous/publicKey'), params=params, timeout=20)
         if resp.status != 200:
+            print(f"Public key endpoint returned status: {resp.status}")
+            text = await resp.text()
+            print(f"Response: {text[:500]}")
             raise InvalidCredentialsException()
         payload = await resp.json()
+        print(f"Public key response: {payload}")
+        
+        # Try different response formats
         key_data = payload.get('data')
-        if not key_data:
+        if isinstance(key_data, dict):
+            pem_data = key_data.get('publicKey', key_data.get('data'))
+        elif isinstance(key_data, str):
+            pem_data = key_data
+        else:
+            print(f"Unexpected key_data type: {type(key_data)}")
             raise InvalidCredentialsException()
-        pem = f"-----BEGIN PUBLIC KEY-----\n{key_data}\n-----END PUBLIC KEY-----"
-        return load_pem_public_key(pem.encode('ascii'))
+            
+        if not pem_data:
+            print("No public key data found in response")
+            raise InvalidCredentialsException()
+            
+        # Ensure PEM format
+        if not pem_data.startswith('-----BEGIN'):
+            pem = f"-----BEGIN PUBLIC KEY-----\n{pem_data}\n-----END PUBLIC KEY-----"
+        else:
+            pem = pem_data
+            
+        return load_pem_public_key(pem.encode('utf-8'))
 
     def __url(self, path: str) -> str:
         return f'{self.base_url}/{path}'

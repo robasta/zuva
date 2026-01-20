@@ -1,6 +1,5 @@
 FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
 # Install system dependencies
@@ -8,37 +7,28 @@ RUN apt-get update && apt-get install -y \
     gcc \
     python3-dev \
     build-essential \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY collector/requirements.txt /app/
+# Copy and install base sunsynk client first
+COPY .git /app/.git
+COPY sunsynk /app/sunsynk
+COPY setup.py /app/
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -e .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# Copy collector requirements and install
+COPY sunsynk-dashboard/collector/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy collector source code
-COPY collector/ /app/collector/
-
-# Copy the parent sunsynk module
-COPY sunsynk/ /app/sunsynk/
-
-# Copy analytics module  
-COPY analytics/ /app/analytics/
+# Copy collector code
+COPY sunsynk-dashboard/collector/ /app/collector/
 
 # Set Python path to include all directories
-ENV PYTHONPATH="/app:/app/collector:/app/analytics"
+ENV PYTHONPATH="/app:/app/collector"
 
 # Create logs directory
 RUN mkdir -p /app/logs
 
-# Set up non-root user for security
-RUN useradd --create-home --shell /bin/bash collector
-RUN chown -R collector:collector /app
-USER collector
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import asyncio; from models import system_health; print('healthy' if system_health.is_healthy() else exit(1))"
-
-# Run the data collector
-CMD ["python", "/app/collector/data_collector.py"]
+# Run the alert monitor
+CMD ["python", "-m", "collector.alert_monitor"]
