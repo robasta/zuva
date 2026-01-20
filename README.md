@@ -1,4 +1,173 @@
-# Sunsynk API Client
+# Sunsynk Solar Notification System
+
+A lightweight notification system for Sunsynk solar inverters that sends alerts via Telegram and WhatsApp when important events occur.
+
+## Features
+
+- 🔋 **Battery Monitoring**: Get alerts when battery levels are low or critical
+- ⚡ **Grid Status**: Notifications for grid outages and power restoration  
+- 📊 **Consumption Tracking**: High energy consumption warnings
+- 📱 **Multi-Channel**: Send notifications via Telegram bot or WhatsApp
+- ⏰ **Smart Filtering**: Quiet hours, rate limiting, and severity thresholds
+- 🎯 **Simple Setup**: Docker-based deployment with minimal configuration
+
+## Quick Start
+
+### Prerequisites
+
+- Docker and Docker Compose
+- Sunsynk account credentials
+- Telegram Bot Token (from @BotFather) and/or Twilio account for WhatsApp
+
+### Setup
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/sunsynk-api-client.git
+cd sunsynk-api-client/sunsynk-dashboard
+```
+
+2. Create environment file:
+```bash
+cp .env.template .env
+# Edit .env with your credentials
+```
+
+3. Configure your notification channels:
+
+**For Telegram:**
+- Message @BotFather on Telegram
+- Create a new bot with `/newbot`
+- Copy the bot token to `TELEGRAM_BOT_TOKEN` in .env
+- Start a chat with your bot and send `/start`
+- Get your chat ID by visiting `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
+
+**For WhatsApp:**
+- Sign up at https://www.twilio.com
+- Get your Account SID and Auth Token
+- Configure Twilio WhatsApp sandbox or use production number
+- Add credentials to .env
+
+4. Start the system:
+```bash
+docker-compose up -d
+```
+
+## Configuration
+
+Edit the `.env` file to customize:
+
+```bash
+# Alert Thresholds
+BATTERY_LOW_THRESHOLD=20        # Alert when battery below 20%
+BATTERY_CRITICAL_THRESHOLD=10   # Critical alert below 10%
+HIGH_CONSUMPTION_THRESHOLD=5    # Alert when load exceeds 5 kW
+POLL_INTERVAL=60               # Check inverter every 60 seconds
+```
+
+## Managing Notification Settings
+
+Use the API to configure your notification preferences:
+
+```bash
+# Update settings for default user
+curl -X POST http://localhost:8000/settings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "default",
+    "enabled_channels": ["telegram", "whatsapp"],
+    "telegram_chat_id": "your_chat_id",
+    "whatsapp_number": "+1234567890",
+    "quiet_hours_start": "22:00",
+    "quiet_hours_end": "07:00",
+    "min_severity": "medium",
+    "rate_limit_minutes": 15
+  }'
+```
+
+## API Endpoints
+
+- `GET /health` - System health check
+- `POST /settings` - Update notification settings
+- `GET /settings/{user_id}` - Get user settings
+- `POST /alert` - Send manual alert (for testing)
+- `GET /alerts/history/{user_id}?hours=24` - Get alert history
+
+## Alert Categories
+
+| Category | Severity | Description |
+|----------|----------|-------------|
+| `battery_critical` | CRITICAL | Battery below critical threshold |
+| `battery_low` | HIGH | Battery below low threshold |
+| `grid_outage` | HIGH | Grid power lost |
+| `grid_restored` | MEDIUM | Grid power restored |
+| `high_consumption` | MEDIUM | Load exceeds threshold |
+| `system_error` | HIGH | System errors |
+
+## Architecture
+
+```
+┌─────────────────┐
+│  Sunsynk API    │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐      ┌──────────────────┐
+│ Alert Monitor   │─────▶│ Notification API │
+│  (Collector)    │      │   (FastAPI)      │
+└─────────────────┘      └────────┬─────────┘
+         │                        │
+         ▼                        ▼
+    ┌─────────┐         ┌─────────────────┐
+    │ InfluxDB│         │  Telegram Bot   │
+    │         │         │  Twilio/WhatsApp│
+    └─────────┘         └─────────────────┘
+```
+
+## Development
+
+The system consists of three main components:
+
+1. **InfluxDB**: Stores alert history and user settings
+2. **Notification API**: REST API for managing settings and sending notifications
+3. **Alert Monitor**: Polls Sunsynk API and triggers alerts based on thresholds
+
+### Running Locally
+
+```bash
+# Install Python dependencies
+cd sunsynk-dashboard
+pip install -r notification_service/requirements.txt
+pip install -r collector/requirements.txt
+
+# Run notification service
+python -m notification_service.main
+
+# Run alert monitor (in separate terminal)
+python -m collector.alert_monitor
+```
+
+## Troubleshooting
+
+**No notifications received:**
+- Check that services are running: `docker-compose ps`
+- Verify credentials in .env file
+- Check logs: `docker-compose logs -f notification-api`
+- Test Telegram bot: Send `/start` to your bot
+- For WhatsApp: Ensure Twilio sandbox is active or production number is verified
+
+**Alert Monitor not connecting:**
+- Verify Sunsynk credentials
+- Check logs: `docker-compose logs -f alert-monitor`
+- Ensure InfluxDB is running: `curl http://localhost:8086/health`
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
 [![CI](https://github.com/jamesridgway/sunsynk-api-client/actions/workflows/ci.yml/badge.svg)](https://github.com/jamesridgway/sunsynk-api-client/actions/workflows/ci.yml)
 
 An API client library for reading data from the Sunsynk API that is used by the Sunsynk Connect apps and 

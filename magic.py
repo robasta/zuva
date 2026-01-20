@@ -1,7 +1,11 @@
 import asyncio
 import os
+from dotenv import load_dotenv
 
 from sunsynk.client import SunsynkClient
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 async def main():
