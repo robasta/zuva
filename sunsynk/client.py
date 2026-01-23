@@ -1,8 +1,9 @@
-import base64
-import time
-
 import aiohttp
-from cryptography.hazmat.primitives.asymmetric import padding
+import ssl
+import time
+import hashlib
+import base64
+from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
 from sunsynk.battery import Battery
@@ -18,30 +19,84 @@ class InvalidCredentialsException(Exception):
         super().__init__('Invalid username or password')
 
 
+class VerificationCodeRequiredException(Exception):
+    def __init__(self, message: str = 'Verification code required'):
+        super().__init__(message)
+
+
 class SunsynkClient:
 
     @classmethod
-    async def create(cls, username: str, password: str, base_url: str = None):
-        self = SunsynkClient(username, password, base_url)
+    async def create(
+        cls,
+        username: str,
+        password: str,
+        base_url: str = None,
+        debug: bool = False,
+        verification_code: str | None = None,
+    ):
+        self = SunsynkClient(username, password, base_url, debug=debug, verification_code=verification_code)
         return await self.login()
 
-    def __init__(self, username: str, password: str, base_url: str=None):
+    def __init__(
+        self,
+        username: str,
+        password: str,
+        base_url: str = None,
+        debug: bool = False,
+        verification_code: str | None = None,
+    ):
         self.base_url = 'https://api.sunsynk.net' if base_url is None else base_url
-        self.session = aiohttp.ClientSession()
+        self.debug = debug
+        self.verification_code = verification_code
+        
+        # Create SSL context that doesn't verify certificates
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
+        self.session = aiohttp.ClientSession(connector=connector)
+        
         self.access_token = None
         self.refresh_token = None
         self.username = username
         self.password = password
 
     async def __aenter__(self):
-        await self.login()
-        return self
+        try:
+            await self.login()
+            return self
+        except Exception:
+            # Ensure we don't leak open sessions when login fails
+            await self.close()
+            raise
 
     async def __aexit__(self, *args):
         await self.close()
 
     async def close(self):
-        await self.session.close()
+        if self.session and not self.session.closed:
+            await self.session.close()
+
+    async def request_verification_code(self):
+        """Request a login verification code for this username.
+
+        The Sunsynk web client calls `GET /anonymous/getVerificationCode?username=...`.
+        In practice this may trigger delivery out-of-band (email/SMS), and often returns `data: null`.
+        """
+        resp = await self.session.get(
+            self.__url('anonymous/getVerificationCode'),
+            params={'username': self.username},
+            timeout=20,
+        )
+        if resp.status != 200:
+            return None
+        try:
+            body = await resp.json()
+        except Exception:
+            return None
+        return body
 
     async def get_plants(self) -> list[Plant]:
         resp = await self.__get('api/v1/plants?page=1&limit=10&name=&status=')
@@ -92,79 +147,95 @@ class SunsynkClient:
         return headers
 
     async def login(self):
-        public_key = await self.__fetch_public_key()
+        # Determine source based on base URL
+        source = 'elinter' if 'inteless' in self.base_url else 'sunsynk'
+        
+        # Get public key
+        nonce = int(time.time() * 1000)
+        sign_string = f"nonce={nonce}&source={source}POWER_VIEW"
+        sign = hashlib.md5(sign_string.encode()).hexdigest()
+        
+        url = self.__url('anonymous/publicKey')
+        params = {'source': source, 'nonce': nonce, 'sign': sign}
+        
+        resp = await self.session.get(url, params=params, timeout=20)
+        if resp.status != 200:
+            raise InvalidCredentialsException()
+        
+        resp_body = await resp.json()
+        if not resp_body['success']:
+            raise InvalidCredentialsException()
+        
+        public_key_string = resp_body['data']
+        
+        # Encrypt password - format public key properly
+        pem_key = f"-----BEGIN PUBLIC KEY-----\n{public_key_string}\n-----END PUBLIC KEY-----"
+        public_key = load_pem_public_key(pem_key.encode('utf-8'))
         encrypted_password = base64.b64encode(
-            public_key.encrypt(self.password.encode('utf-8'), padding.PKCS1v15())
-        ).decode('ascii')
-
+            public_key.encrypt(self.password.encode('utf-8'), PKCS1v15())
+        ).decode('utf-8')
+        
+        # Login with encrypted password and sign
+        token_nonce = int(time.time() * 1000)
+        # Matches Sunsynk web client behavior:
+        # r = f"nonce={nonce}&source={payload.source}"; sign = md5(r + publicKey[:10])
+        token_sign_string = f"nonce={token_nonce}&source={source}{public_key_string[:10]}"
+        token_sign = hashlib.md5(token_sign_string.encode()).hexdigest()
+        
         payload = {
-            'areaCode': 'sunsynk',
-            'client_id': 'csp-web',
-            'grant_type': 'password',
+            'username': self.username,
             'password': encrypted_password,
-            'scope': 'all',
-            'source': 'sunsynk',
-            'terminal': 'csp-web',
-            'type': 'ACCOUNT',
-            'username': self.username
+            'grant_type': 'password',
+            'client_id': 'csp-web',
+            'source': source,
+            'nonce': token_nonce,
+            'sign': token_sign
         }
-        print(f"Login request - username: {self.username}")
-        resp = await self.session.post(self.__url('oauth/token/new'),
+
+        # Optional verification/captcha code required after repeated failures (API returns code=114)
+        if self.verification_code:
+            payload['code'] = self.verification_code
+        
+        url = self.__url('oauth/token/new')
+        if self.debug:
+            safe_payload = dict(payload)
+            safe_payload['password'] = '<redacted>'
+            print(f"Login URL: {url}")
+            print(f"Username: {self.username}")
+            print(f"Login request body: {safe_payload}")
+        resp = await self.session.post(url,
                                        headers={"Content-Type": "application/json"},
                                        timeout=20,
                                        json=payload)
-        print(f"Login response status: {resp.status}")
+        if self.debug:
+            print(f"Login response status: {resp.status}")
         if resp.status == 200:
             resp_body = await resp.json()
-            print(f"Login response body: {resp_body}")
-            if resp_body.get('success') or resp_body.get('msg') == 'Success':
-                data = resp_body.get('data') or {}
-                if data.get('access_token') and data.get('refresh_token'):
-                    self.access_token = data['access_token']
-                    self.refresh_token = data['refresh_token']
-                    print("✅ Login successful")
-                    return self
-        else:
-            text = await resp.text()
-            print(f"Login failed - status {resp.status}: {text[:500]}")
-        raise InvalidCredentialsException()
+            if self.debug:
+                print(f"Login response: {resp_body}")
+            if resp_body.get('success'):
+                self.access_token = resp_body['data']['access_token']
+                self.refresh_token = resp_body['data']['refresh_token']
+                return self
 
-    async def __fetch_public_key(self):
-        params = {
-            'clientId': 'csp-web',
-            'source': 'sunsynk',
-            'nonce': str(int(time.time() * 1000))
-        }
-        resp = await self.session.get(self.__url('anonymous/publicKey'), params=params, timeout=20)
-        if resp.status != 200:
-            print(f"Public key endpoint returned status: {resp.status}")
+            # Verification code required
+            if resp_body.get('code') == 114:
+                if self.verification_code:
+                    raise VerificationCodeRequiredException(
+                        'Verification code rejected/expired. Request a new one and retry.'
+                    )
+
+                # Trigger code delivery and instruct caller to retry with `code`
+                await self.request_verification_code()
+                raise VerificationCodeRequiredException(
+                    'Too many login failures; verification code required. '
+                    'Call request_verification_code() and retry with `verification_code` (payload field `code`).'
+                )
+        else:
             text = await resp.text()
-            print(f"Response: {text[:500]}")
-            raise InvalidCredentialsException()
-        payload = await resp.json()
-        print(f"Public key response: {payload}")
-        
-        # Try different response formats
-        key_data = payload.get('data')
-        if isinstance(key_data, dict):
-            pem_data = key_data.get('publicKey', key_data.get('data'))
-        elif isinstance(key_data, str):
-            pem_data = key_data
-        else:
-            print(f"Unexpected key_data type: {type(key_data)}")
-            raise InvalidCredentialsException()
-            
-        if not pem_data:
-            print("No public key data found in response")
-            raise InvalidCredentialsException()
-            
-        # Ensure PEM format
-        if not pem_data.startswith('-----BEGIN'):
-            pem = f"-----BEGIN PUBLIC KEY-----\n{pem_data}\n-----END PUBLIC KEY-----"
-        else:
-            pem = pem_data
-            
-        return load_pem_public_key(pem.encode('utf-8'))
+            if self.debug:
+                print(f"Login failed: {text[:500]}")
+        raise InvalidCredentialsException()
 
     def __url(self, path: str) -> str:
         return f'{self.base_url}/{path}'

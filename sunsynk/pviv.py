@@ -4,6 +4,8 @@ from sunsynk.resource import Resource
 
 
 class PvIv(Resource):
+    """PV input voltage/current data model."""
+    
     def __init__(self, data):
         self.id = data['id']
         self.pv_no = data['pvNo']
