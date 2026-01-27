@@ -34,6 +34,7 @@ INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "solar_data")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "robasta")
 
 
 class NotificationChannel(str, Enum):
@@ -159,14 +160,14 @@ class NotificationService:
             logger.info(f"Loaded settings for {len(self.user_settings)} users")
             
             # Auto-create default user settings from environment variables if not exists
-            if "default" not in self.user_settings:
+            if DEFAULT_USER_ID not in self.user_settings:
                 enabled_channels = []
                 if TELEGRAM_CHAT_ID and TELEGRAM_BOT_TOKEN:
                     enabled_channels.append("telegram")
                 
                 if enabled_channels:
                     default_settings = UserSettings(
-                        user_id="default",
+                        user_id=DEFAULT_USER_ID,
                         enabled_channels=enabled_channels,
                         telegram_chat_id=TELEGRAM_CHAT_ID,
                         quiet_hours_start="22:00",
@@ -174,7 +175,7 @@ class NotificationService:
                         min_severity="medium",
                         rate_limit_minutes=15
                     )
-                    self.user_settings["default"] = default_settings
+                    self.user_settings[DEFAULT_USER_ID] = default_settings
                     logger.info("Auto-configured default user from environment variables")
         except Exception as e:
             logger.error(f"Error loading user settings: {e}")
@@ -235,8 +236,11 @@ class NotificationService:
         min_idx = severity_order.index(min_severity)
         return alert_idx >= min_idx
     
-    async def send_alert(self, alert: Alert, user_id: str = "default"):
+    async def send_alert(self, alert: Alert, user_id: str = DEFAULT_USER_ID):
         """Send alert to user via configured channels"""
+        if alert.category == AlertCategory.BATTERY_CRITICAL and alert.severity != AlertSeverity.CRITICAL:
+            alert = alert.copy(update={"severity": AlertSeverity.CRITICAL})
+
         settings = self.user_settings.get(user_id)
         if not settings:
             logger.warning(f"No settings found for user {user_id}")
@@ -300,12 +304,15 @@ class NotificationService:
                 for key, value in alert.metadata.items():
                     message += f"• {key}: {value}\n"
             
-            await self.telegram_bot.send_message(
+            response = await self.telegram_bot.send_message(
                 chat_id=settings.telegram_chat_id,
-                text=message,
-                parse_mode="Markdown"
+                text=message
             )
-            logger.info(f"Sent Telegram alert to {settings.telegram_chat_id}")
+            logger.info(
+                "Sent Telegram alert to %s (message_id=%s)",
+                settings.telegram_chat_id,
+                getattr(response, "message_id", None),
+            )
             return True
             
         except TelegramError as e:

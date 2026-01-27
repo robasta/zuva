@@ -34,6 +34,8 @@ services:
       - INFLUXDB_ORG=sunsynk
       - INFLUXDB_BUCKET=solar_data
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - DEFAULT_USER_ID=${DEFAULT_USER_ID}
     depends_on:
       - influxdb
     networks:
@@ -54,10 +56,11 @@ services:
       - INFLUXDB_ORG=sunsynk
       - INFLUXDB_BUCKET=solar_data
       - NOTIFICATION_API_URL=http://notification-api:8000
-      - POLL_INTERVAL=${POLL_INTERVAL:-60}
+      - DEFAULT_USER_ID=${DEFAULT_USER_ID}
+      - POLL_INTERVAL=${POLL_INTERVAL:-600}
       - BATTERY_LOW_THRESHOLD=${BATTERY_LOW_THRESHOLD:-20}
       - BATTERY_CRITICAL_THRESHOLD=${BATTERY_CRITICAL_THRESHOLD:-15}
-      - HIGH_CONSUMPTION_THRESHOLD=${HIGH_CONSUMPTION_THRESHOLD:-0.8}
+      - HIGH_CONSUMPTION_THRESHOLD=${HIGH_CONSUMPTION_THRESHOLD:-400}
     depends_on:
       - influxdb
       - notification-api

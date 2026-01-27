@@ -31,6 +31,7 @@ INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "sunsynk")
 INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "solar_data")
 
 NOTIFICATION_API_URL = os.getenv("NOTIFICATION_API_URL", "http://notification-api:8000")
+DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "robasta")
 
 # Alert Thresholds
 BATTERY_LOW_THRESHOLD = float(os.getenv("BATTERY_LOW_THRESHOLD", "20"))  # %
@@ -73,7 +74,7 @@ class AlertMonitor:
                 async with session.post(
                     f"{NOTIFICATION_API_URL}/alert",
                     json=payload,
-                    params={"user_id": "default"}
+                    params={"user_id": DEFAULT_USER_ID}
                 ) as response:
                     if response.status == 200:
                         logger.info(f"Alert sent: {category}")
@@ -142,13 +143,32 @@ class AlertMonitor:
     
     async def check_consumption_alerts(self, load_power: float):
         """Check for high consumption"""
-        if load_power > HIGH_CONSUMPTION_THRESHOLD:
+        now = datetime.now().time()
+
+        # Daytime (06:00-18:00): no alert due to sunlight
+        if time(6, 0) <= now < time(18, 0):
+            return
+
+        # Evening (18:00-23:00): high severity if > 900 kW
+        if time(18, 0) <= now < time(23, 0):
+            if load_power > 900:
+                await self.send_alert(
+                    category="high_consumption",
+                    severity="high",
+                    title="📊 High Energy Consumption",
+                    message=f"Evening consumption is high at {load_power:.2f} kW (limit 900 kW).",
+                    metadata={"load_power": load_power, "limit_kw": 900}
+                )
+            return
+
+        # Night (23:00-06:00): critical severity if > 400 kW
+        if load_power > 400:
             await self.send_alert(
                 category="high_consumption",
-                severity="medium",
-                title="📊 High Energy Consumption",
-                message=f"Current consumption is high at {load_power:.2f} kW. Consider reducing load.",
-                metadata={"load_power": load_power}
+                severity="critical",
+                title="🚨 Critical Night Consumption",
+                message=f"Night consumption is high at {load_power:.2f} kW (limit 400 kW).",
+                metadata={"load_power": load_power, "limit_kw": 400}
             )
     
     async def monitor_loop(self):
@@ -174,7 +194,7 @@ class AlertMonitor:
                     plant = plants[0]
                     
                     # Get inverters
-                    inverters = await client.get_inverters(plant.id)
+                    inverters = await client.get_inverters()
                     if not inverters:
                         logger.warning("No inverters found")
                         await asyncio.sleep(POLL_INTERVAL)
@@ -183,14 +203,15 @@ class AlertMonitor:
                     inverter = inverters[0]
                     
                     # Get current data
-                    battery = await inverter.get_battery()
-                    grid = await inverter.get_grid()
-                    output = await inverter.get_output()
+                    battery = await client.get_inverter_realtime_battery(inverter.sn)
+                    grid = await client.get_inverter_realtime_grid(inverter.sn)
+                    output = await client.get_inverter_realtime_output(inverter.sn)
                     
                     # Extract metrics
-                    battery_soc = battery.capacity if hasattr(battery, 'capacity') else 0
-                    grid_power = grid.get_power() if hasattr(grid, 'get_power') else 0
-                    load_power = output.get_power() if hasattr(output, 'get_power') else 0
+                    battery_soc = float(getattr(battery, 'soc', 0) or 0)
+                    grid_power = grid.get_power() if hasattr(grid, 'get_power') else float(getattr(grid, 'pac', 0) or 0)
+                    grid_power = float(grid_power or 0)
+                    load_power = float(getattr(output, 'pac', 0) or 0)
                     
                     logger.info(f"Battery: {battery_soc}%, Grid: {grid_power}kW, Load: {load_power}kW")
                     
