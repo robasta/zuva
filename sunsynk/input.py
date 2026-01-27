@@ -11,3 +11,8 @@ class Input(Resource):
 
     def get_power(self) -> float:
         return sum(float(x.ppv) for x in self.pv_iv)
+
+    def get_voltage(self) -> float | None:
+        if len(self.pv_iv) == 0:
+            return None
+        return sum(float(x.vpv) for x in self.pv_iv) / len(self.pv_iv)

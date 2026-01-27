@@ -1,13 +1,13 @@
 # Sunsynk Solar Notification System
 
-A lightweight notification system for Sunsynk solar inverters that sends alerts via Telegram and WhatsApp when important events occur.
+A lightweight notification system for Sunsynk solar inverters that sends alerts via Telegram when important events occur.
 
 ## Features
 
 - 🔋 **Battery Monitoring**: Get alerts when battery levels are low or critical
 - ⚡ **Grid Status**: Notifications for grid outages and power restoration  
 - 📊 **Consumption Tracking**: High energy consumption warnings
-- 📱 **Multi-Channel**: Send notifications via Telegram bot or WhatsApp
+- 📱 **Telegram Notifications**: Send notifications via Telegram bot
 - ⏰ **Smart Filtering**: Quiet hours, rate limiting, and severity thresholds
 - 🎯 **Simple Setup**: Docker-based deployment with minimal configuration
 
@@ -17,7 +17,7 @@ A lightweight notification system for Sunsynk solar inverters that sends alerts 
 
 - Docker and Docker Compose
 - Sunsynk account credentials
-- Telegram Bot Token (from @BotFather) and/or Twilio account for WhatsApp
+- Telegram Bot Token (from @BotFather)
 
 ### Setup
 
@@ -41,12 +41,6 @@ cp .env.template .env
 - Copy the bot token to `TELEGRAM_BOT_TOKEN` in .env
 - Start a chat with your bot and send `/start`
 - Get your chat ID by visiting `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
-
-**For WhatsApp:**
-- Sign up at https://www.twilio.com
-- Get your Account SID and Auth Token
-- Configure Twilio WhatsApp sandbox or use production number
-- Add credentials to .env
 
 4. Start the system:
 ```bash
@@ -75,9 +69,8 @@ curl -X POST http://localhost:8000/settings \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "default",
-    "enabled_channels": ["telegram", "whatsapp"],
+    "enabled_channels": ["telegram"],
     "telegram_chat_id": "your_chat_id",
-    "whatsapp_number": "+1234567890",
     "quiet_hours_start": "22:00",
     "quiet_hours_end": "07:00",
     "min_severity": "medium",
@@ -120,7 +113,7 @@ curl -X POST http://localhost:8000/settings \
          ▼                        ▼
     ┌─────────┐         ┌─────────────────┐
     │ InfluxDB│         │  Telegram Bot   │
-    │         │         │  Twilio/WhatsApp│
+    │         │         │  Telegram Bot  │
     └─────────┘         └─────────────────┘
 ```
 
@@ -154,7 +147,6 @@ python -m collector.alert_monitor
 - Verify credentials in .env file
 - Check logs: `docker-compose logs -f notification-api`
 - Test Telegram bot: Send `/start` to your bot
-- For WhatsApp: Ensure Twilio sandbox is active or production number is verified
 
 **Alert Monitor not connecting:**
 - Verify Sunsynk credentials

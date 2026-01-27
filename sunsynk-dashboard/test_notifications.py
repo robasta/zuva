@@ -23,7 +23,6 @@ async def test_notification_api():
                     data = await response.json()
                     print(f"✅ API is healthy")
                     print(f"   - Telegram enabled: {data.get('telegram_enabled')}")
-                    print(f"   - WhatsApp enabled: {data.get('whatsapp_enabled')}")
                     print(f"   - Users configured: {data.get('users_configured')}")
                     return True
                 else:
@@ -61,7 +60,7 @@ async def test_send_alert(user_id="default"):
             ) as response:
                 if response.status == 200:
                     print("✅ Test alert sent successfully!")
-                    print("   Check your Telegram/WhatsApp for the message")
+                    print("   Check your Telegram for the message")
                     return True
                 else:
                     text = await response.text()
@@ -87,7 +86,6 @@ async def check_settings(user_id="default"):
                     print("✅ User settings found:")
                     print(f"   - Enabled channels: {settings.get('enabled_channels')}")
                     print(f"   - Telegram chat ID: {settings.get('telegram_chat_id') or 'Not set'}")
-                    print(f"   - WhatsApp number: {settings.get('whatsapp_number') or 'Not set'}")
                     print(f"   - Quiet hours: {settings.get('quiet_hours_start')} - {settings.get('quiet_hours_end')}")
                     print(f"   - Min severity: {settings.get('min_severity')}")
                     return True
@@ -128,7 +126,7 @@ async def main():
     
     print("\n✅ Testing complete!")
     print("\nNext steps:")
-    print("  1. Configure your Telegram chat ID and/or WhatsApp number")
+    print("  1. Configure your Telegram chat ID")
     print("  2. Set up user settings via POST /settings")
     print("  3. Monitor logs: docker-compose logs -f")
     print("\n🌞 Your notification system is ready!")

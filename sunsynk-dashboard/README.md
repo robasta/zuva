@@ -1,6 +1,6 @@
 # Sunsynk Notification Service
 
-Simple notification system for Sunsynk solar inverter alerts via Telegram and WhatsApp.
+Simple notification system for Sunsynk solar inverter alerts via Telegram.
 
 ## Quick Start
 
@@ -51,7 +51,7 @@ A comprehensive solar monitoring system that transforms the Sunsynk API client i
 - **Historical Analytics**: Hourly, daily, and monthly consumption patterns
 - **Weather Integration**: Sunshine hours, forecasts, and solar production correlation
 - **Battery Intelligence**: Runtime calculations and geyser usage optimization
-- **Multi-channel Notifications**: WhatsApp, SMS, Push notifications, and Voice calls
+- **Telegram Notifications**: Alerts delivered via Telegram bot
 - **Mobile Application**: Cross-platform app with offline capabilities
 - **Time-based Alerts**: Conditional alerts based on time of day and battery status
 
@@ -68,7 +68,6 @@ A comprehensive solar monitoring system that transforms the Sunsynk API client i
 - **Weather Alerts**: Low sunshine projections and continuous cloud cover
 - **Consumption Alerts**: High usage warnings and threshold breaches
 - **System Alerts**: Grid outages and inverter connectivity issues
-- **Voice Calls**: Critical battery situations with high consumption
 
 ## Environment Variables
 
@@ -115,7 +114,7 @@ DISABLE_MOCK_FALLBACK=false
 - Docker and Docker Compose
 - Sunsynk Connect account credentials
 - OpenWeatherMap API key (free)
-- Optional: Twilio account for notifications
+- Telegram bot token for notifications
 
 ### 1. Clone and Setup
 ```bash
@@ -134,8 +133,7 @@ SUNSYNK_PASSWORD=your_password
 WEATHER_API_KEY=your_openweather_key
 
 # Optional (for notifications)
-TWILIO_ACCOUNT_SID=your_twilio_sid
-TWILIO_AUTH_TOKEN=your_twilio_token
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 ```
 
 ### 3. Deploy
@@ -196,13 +194,13 @@ alerts:
   battery_low_daytime:
     condition: "battery_soc < 65 AND hour >= 11 AND hour <= 18"
     severity: "warning"
-    channels: ["whatsapp", "push"]
+    channels: ["telegram"]
     cooldown: "1h"
     
   battery_critical_high_usage:
     condition: "battery_soc <= 15 AND load_power > 0.4"
     severity: "critical"
-    channels: ["voice_call", "sms", "whatsapp"]
+    channels: ["telegram"]
     cooldown: "5min"
 ```
 
@@ -227,27 +225,6 @@ alerts:
 - Push notifications and alert management
 - Offline mode with data synchronization
 
-## Notifications
-
-### Supported Channels
-1. **WhatsApp**: Via Twilio WhatsApp API
-2. **SMS**: Standard text messages via Twilio
-3. **Push Notifications**: Mobile app via Firebase
-4. **Voice Calls**: Automated voice alerts for critical situations
-5. **Email**: SMTP-based email notifications
-
-### Alert Types
-- **Battery Status**: Full, low SOC, critical levels
-- **Weather**: Low sunshine, continuous cloud cover
-- **Consumption**: High usage, threshold breaches
-- **System**: Grid outages, inverter offline
-- **Time-based**: Conditional alerts based on time of day
-
-### Cooldown Control
-- `ALERT_COOLDOWN_MINUTES` defines the global "no-repeat" window (default 20 minutes). Alerts are still persisted but outbound delivery is skipped until this window expires.
-- `ALERT_COOLDOWN_OVERRIDES` accepts a JSON map (e.g. `{ "battery_low": "45min" }`) for category-specific timing without rebuilding the container.
-- `config/alerts.yaml` cooldown entries automatically override the defaults when the backend boots. Keep the category names in sync with what `AlertManager.create_alert()` emits.
-- Suppressed alerts are tagged with `suppressed_reason=cooldown` in their metadata so analytics and UI layers can display the skipped events.
 
 ## Monitoring & Maintenance
 
@@ -341,7 +318,7 @@ python -m pytest tests/integration/
 ### Common Issues
 1. **API Connection**: Check Sunsynk credentials and internet connectivity
 2. **Database**: Ensure InfluxDB is running and accessible
-3. **Notifications**: Verify Twilio credentials and phone numbers
+3. **Notifications**: Verify Telegram bot token and chat ID
 4. **Performance**: Monitor resource usage on Raspberry Pi
 
 ### Support

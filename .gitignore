@@ -186,3 +186,5 @@ sunsynk-dashboard/logs/
 sunsynk-dashboard/data/
 sunsynk-dashboard/backup/
 sunsynk-dashboard/node_modules/
+
+deployment.md

@@ -3,6 +3,7 @@ import ssl
 import time
 import hashlib
 import base64
+import os
 from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
@@ -21,6 +22,11 @@ class InvalidCredentialsException(Exception):
 
 class VerificationCodeRequiredException(Exception):
     def __init__(self, message: str = 'Verification code required'):
+        super().__init__(message)
+
+
+class LoginRateLimitedException(Exception):
+    def __init__(self, message: str = 'Login rate limited'):
         super().__init__(message)
 
 
@@ -62,6 +68,9 @@ class SunsynkClient:
         self.refresh_token = None
         self.username = username
         self.password = password
+        self._last_login_attempt = 0.0
+        self._last_login_failure = 0.0
+        self._login_rate_limit_seconds = float(os.getenv("SUNSYNK_LOGIN_RATE_LIMIT_SECONDS", "60"))
 
     async def __aenter__(self):
         try:
@@ -138,6 +147,29 @@ class SunsynkClient:
             return await self.__get(path, attempts=attempts + 1)
         return resp
 
+    async def _notify_login_failure(self, reason: str):
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        if not token or not chat_id:
+            return
+
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        message = (
+            "Sunsynk login failed\n"
+            f"User: {self.username}\n"
+            f"Base URL: {self.base_url}\n"
+            f"Time: {timestamp}\n"
+            f"Reason: {reason}"
+        )
+
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {"chat_id": chat_id, "text": message}
+        try:
+            await self.session.post(url, json=payload, timeout=10)
+        except Exception:
+            if self.debug:
+                print("Telegram notification failed")
+
     def __headers(self) -> dict[str, str]:
         headers = {
             "Content-Type": "application/json"
@@ -147,6 +179,15 @@ class SunsynkClient:
         return headers
 
     async def login(self):
+        now = time.monotonic()
+        elapsed = now - self._last_login_attempt
+        if elapsed < self._login_rate_limit_seconds:
+            remaining = int(self._login_rate_limit_seconds - elapsed)
+            raise LoginRateLimitedException(
+                f"Login rate limited. Retry after {remaining}s."
+            )
+        self._last_login_attempt = now
+
         # Determine source based on base URL
         source = 'elinter' if 'inteless' in self.base_url else 'sunsynk'
         
@@ -160,10 +201,14 @@ class SunsynkClient:
         
         resp = await self.session.get(url, params=params, timeout=20)
         if resp.status != 200:
+            self._last_login_failure = time.monotonic()
+            await self._notify_login_failure(f"publicKey request failed (status {resp.status})")
             raise InvalidCredentialsException()
         
         resp_body = await resp.json()
         if not resp_body['success']:
+            self._last_login_failure = time.monotonic()
+            await self._notify_login_failure("publicKey response not successful")
             raise InvalidCredentialsException()
         
         public_key_string = resp_body['data']
@@ -220,6 +265,8 @@ class SunsynkClient:
 
             # Verification code required
             if resp_body.get('code') == 114:
+                self._last_login_failure = time.monotonic()
+                await self._notify_login_failure("verification code required")
                 if self.verification_code:
                     raise VerificationCodeRequiredException(
                         'Verification code rejected/expired. Request a new one and retry.'
@@ -235,6 +282,8 @@ class SunsynkClient:
             text = await resp.text()
             if self.debug:
                 print(f"Login failed: {text[:500]}")
+            self._last_login_failure = time.monotonic()
+            await self._notify_login_failure(f"token request failed (status {resp.status})")
         raise InvalidCredentialsException()
 
     def __url(self, path: str) -> str:

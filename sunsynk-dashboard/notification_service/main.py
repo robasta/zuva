@@ -1,6 +1,6 @@
 """
 Sunsynk Notification Service
-Simplified service for sending Telegram and WhatsApp notifications
+Simplified service for sending Telegram notifications
 based on solar inverter alerts.
 """
 import asyncio
@@ -22,9 +22,6 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 from telegram import Bot
 from telegram.error import TelegramError
 
-# Twilio for WhatsApp
-from twilio.rest import Client as TwilioClient
-from twilio.base.exceptions import TwilioRestException
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,16 +34,11 @@ INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "solar_data")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
-TWILIO_WHATSAPP_TO = os.getenv("TWILIO_WHATSAPP_TO")
 
 
 class NotificationChannel(str, Enum):
     """Notification delivery channels"""
     TELEGRAM = "telegram"
-    WHATSAPP = "whatsapp"
 
 
 class AlertSeverity(str, Enum):
@@ -73,7 +65,6 @@ class NotificationSettings(BaseModel):
     user_id: str
     enabled_channels: List[NotificationChannel]
     telegram_chat_id: Optional[str] = None
-    whatsapp_number: Optional[str] = None
     quiet_hours_start: str = "22:00"
     quiet_hours_end: str = "07:00"
     min_severity: AlertSeverity = AlertSeverity.MEDIUM
@@ -96,7 +87,6 @@ class UserSettings:
     user_id: str
     enabled_channels: List[str]
     telegram_chat_id: Optional[str] = None
-    whatsapp_number: Optional[str] = None
     quiet_hours_start: str = "22:00"
     quiet_hours_end: str = "07:00"
     min_severity: str = "medium"
@@ -109,14 +99,13 @@ class UserSettings:
 
 
 class NotificationService:
-    """Handles notification delivery via Telegram and WhatsApp"""
+    """Handles notification delivery via Telegram"""
     
     def __init__(self):
         self.influx_client = None
         self.write_api = None
         self.query_api = None
         self.telegram_bot: Optional[Bot] = None
-        self.twilio_client: Optional[TwilioClient] = None
         self.user_settings: Dict[str, UserSettings] = {}
         
     async def initialize(self):
@@ -136,13 +125,6 @@ class NotificationService:
             logger.info("Telegram bot initialized")
         else:
             logger.warning("TELEGRAM_BOT_TOKEN not set - Telegram notifications disabled")
-        
-        # Twilio for WhatsApp
-        if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
-            self.twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-            logger.info("Twilio client initialized")
-        else:
-            logger.warning("Twilio credentials not set - WhatsApp notifications disabled")
         
         # Load user settings from InfluxDB
         await self._load_user_settings()
@@ -167,7 +149,6 @@ class NotificationService:
                             user_id=user_id,
                             enabled_channels=record.values.get("enabled_channels", "").split(","),
                             telegram_chat_id=record.values.get("telegram_chat_id"),
-                            whatsapp_number=record.values.get("whatsapp_number"),
                             quiet_hours_start=record.values.get("quiet_hours_start", "22:00"),
                             quiet_hours_end=record.values.get("quiet_hours_end", "07:00"),
                             min_severity=record.values.get("min_severity", "medium"),
@@ -182,15 +163,12 @@ class NotificationService:
                 enabled_channels = []
                 if TELEGRAM_CHAT_ID and TELEGRAM_BOT_TOKEN:
                     enabled_channels.append("telegram")
-                if TWILIO_WHATSAPP_TO and TWILIO_ACCOUNT_SID:
-                    enabled_channels.append("whatsapp")
                 
                 if enabled_channels:
                     default_settings = UserSettings(
                         user_id="default",
                         enabled_channels=enabled_channels,
                         telegram_chat_id=TELEGRAM_CHAT_ID,
-                        whatsapp_number=TWILIO_WHATSAPP_TO,
                         quiet_hours_start="22:00",
                         quiet_hours_end="07:00",
                         min_severity="medium",
@@ -207,7 +185,6 @@ class NotificationService:
             user_id=settings.user_id,
             enabled_channels=[ch.value for ch in settings.enabled_channels],
             telegram_chat_id=settings.telegram_chat_id,
-            whatsapp_number=settings.whatsapp_number,
             quiet_hours_start=settings.quiet_hours_start,
             quiet_hours_end=settings.quiet_hours_end,
             min_severity=settings.min_severity.value,
@@ -222,7 +199,6 @@ class NotificationService:
             .tag("user_id", settings.user_id) \
             .field("enabled_channels", ",".join(user_settings.enabled_channels)) \
             .field("telegram_chat_id", user_settings.telegram_chat_id or "") \
-            .field("whatsapp_number", user_settings.whatsapp_number or "") \
             .field("quiet_hours_start", user_settings.quiet_hours_start) \
             .field("quiet_hours_end", user_settings.quiet_hours_end) \
             .field("min_severity", user_settings.min_severity) \
@@ -287,9 +263,6 @@ class NotificationService:
             if channel == NotificationChannel.TELEGRAM.value:
                 if await self._send_telegram(alert, settings):
                     success = True
-            elif channel == NotificationChannel.WHATSAPP.value:
-                if await self._send_whatsapp(alert, settings):
-                    success = True
         
         # Update last alert time
         if success:
@@ -339,36 +312,6 @@ class NotificationService:
             logger.error(f"Telegram error: {e}")
             return False
     
-    async def _send_whatsapp(self, alert: Alert, settings: UserSettings) -> bool:
-        """Send alert via WhatsApp using Twilio"""
-        if not self.twilio_client or not settings.whatsapp_number:
-            logger.warning("WhatsApp not configured for this user")
-            return False
-        
-        try:
-            message = f"*{alert.title}*\n\n{alert.message}"
-            
-            if alert.metadata:
-                message += "\n\nDetails:\n"
-                for key, value in alert.metadata.items():
-                    message += f"• {key}: {value}\n"
-            
-            # Ensure number is in WhatsApp format
-            to_number = settings.whatsapp_number
-            if not to_number.startswith("whatsapp:"):
-                to_number = f"whatsapp:{to_number}"
-            
-            self.twilio_client.messages.create(
-                from_=TWILIO_WHATSAPP_FROM,
-                body=message,
-                to=to_number
-            )
-            logger.info(f"Sent WhatsApp alert to {settings.whatsapp_number}")
-            return True
-            
-        except TwilioRestException as e:
-            logger.error(f"WhatsApp error: {e}")
-            return False
     
     async def shutdown(self):
         """Cleanup resources"""
@@ -406,7 +349,6 @@ async def health():
     return {
         "status": "healthy",
         "telegram_enabled": notification_service.telegram_bot is not None,
-        "whatsapp_enabled": notification_service.twilio_client is not None,
         "users_configured": len(notification_service.user_settings)
     }
 

@@ -6,8 +6,7 @@ Get your Sunsynk notification system running in 5 minutes!
 
 - Docker and Docker Compose installed
 - Sunsynk account credentials
-- Telegram account (for Telegram notifications) OR
-- Twilio account (for WhatsApp notifications)
+- Telegram account (for Telegram notifications)
 
 ## Step 1: Get Telegram Bot Token (Optional)
 
@@ -24,18 +23,7 @@ curl https://api.telegram.org/botYOUR_BOT_TOKEN/getUpdates
 ```
 Look for `"chat":{"id":123456789}` in the response.
 
-## Step 2: Get Twilio Credentials (Optional)
-
-For WhatsApp notifications:
-
-1. Sign up at https://www.twilio.com
-2. Get your Account SID and Auth Token from console
-3. For testing: Use Twilio WhatsApp Sandbox (free)
-   - Go to Messaging → Try it Out → Send a WhatsApp message
-   - Send the provided code to the Twilio number
-4. For production: Request WhatsApp Business approval
-
-## Step 3: Configure Environment
+## Step 2: Configure Environment
 
 ```bash
 cd sunsynk-dashboard
@@ -52,14 +40,11 @@ Minimum required settings:
 SUNSYNK_USERNAME=your_email@example.com
 SUNSYNK_PASSWORD=your_password
 
-# At least one notification channel:
+# Notification channel:
 TELEGRAM_BOT_TOKEN=123456789:ABC...
-# OR
-TWILIO_ACCOUNT_SID=AC...
-TWILIO_AUTH_TOKEN=...
 ```
 
-## Step 4: Start the System
+## Step 3: Start the System
 
 ```bash
 ./start.sh
@@ -71,7 +56,7 @@ docker-compose up -d
 docker-compose logs -f  # Watch logs
 ```
 
-## Step 5: Configure User Settings
+## Step 4: Configure User Settings
 
 ### Option A: Using curl
 
@@ -96,9 +81,8 @@ import requests
 
 settings = {
     "user_id": "default",
-    "enabled_channels": ["telegram", "whatsapp"],
+    "enabled_channels": ["telegram"],
     "telegram_chat_id": "123456789",
-    "whatsapp_number": "+1234567890",
     "quiet_hours_start": "22:00",
     "quiet_hours_end": "07:00",
     "min_severity": "medium",
@@ -109,7 +93,7 @@ response = requests.post("http://localhost:8000/settings", json=settings)
 print(response.json())
 ```
 
-## Step 6: Test Notifications
+## Step 5: Test Notifications
 
 ```bash
 # Run test script
@@ -127,7 +111,7 @@ curl -X POST "http://localhost:8000/alert?user_id=default" \
   }'
 ```
 
-## Step 7: Monitor
+## Step 6: Monitor
 
 ```bash
 # Check service status
@@ -193,12 +177,6 @@ docker-compose restart alert-monitor
 - Check `.env` file has correct TELEGRAM_BOT_TOKEN
 - Restart services: `docker-compose restart`
 
-### WhatsApp messages not sending
-
-- Verify Twilio credentials
-- Check sandbox is activated (for testing)
-- Ensure phone number format: `+1234567890`
-- Check Twilio console for errors
 
 ## Customizing Alert Thresholds
 
@@ -234,7 +212,6 @@ curl -X POST http://localhost:8000/settings \
 # User 2  
 curl -X POST http://localhost:8000/settings \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "jane", "enabled_channels": ["whatsapp"], "whatsapp_number": "+9999999999"}'
 ```
 
 Send alerts to specific user:
