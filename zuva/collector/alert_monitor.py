@@ -15,6 +15,11 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 # Add parent directory to path to import sunsynk client
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 from sunsynk import SunsynkClient
+from sunsynk.client import (
+    InvalidCredentialsException,
+    LoginRateLimitedException,
+    VerificationCodeRequiredException,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,6 +28,7 @@ logger = logging.getLogger(__name__)
 SUNSYNK_USERNAME = os.getenv("SUNSYNK_USERNAME")
 SUNSYNK_PASSWORD = os.getenv("SUNSYNK_PASSWORD")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))  # seconds
+LOGIN_RETRY_WAIT_SECONDS = int(os.getenv("LOGIN_RETRY_WAIT_SECONDS", "900"))
 
 INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://influxdb:8086")
 INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "sunsynk-token")
@@ -168,6 +174,46 @@ class AlertMonitor:
                 message=f"Night consumption is high at {load_power:.2f} kW (limit {HIGH_CONSUMPTION_THRESHOLD:.2f} kW).",
                 metadata={"load_power": load_power, "limit_kw": HIGH_CONSUMPTION_THRESHOLD}
             )
+
+    async def connect_client_with_retry(self):
+        last_error = None
+
+        for attempt in (1, 2):
+            client = SunsynkClient(SUNSYNK_USERNAME, SUNSYNK_PASSWORD)
+            try:
+                await client.login()
+                logger.info("Connected to Sunsynk API")
+                return client
+            except Exception as error:
+                last_error = error
+                await client.close()
+
+                if attempt == 1:
+                    logger.warning(
+                        "Sunsynk login attempt 1 failed: %s. Retrying in %s seconds.",
+                        error,
+                        LOGIN_RETRY_WAIT_SECONDS,
+                    )
+                    await asyncio.sleep(LOGIN_RETRY_WAIT_SECONDS)
+                else:
+                    logger.critical("Sunsynk login attempt 2 failed: %s", error)
+                    await self.send_alert(
+                        category="sunsynk_login_failure",
+                        severity="critical",
+                        title="🚨 Sunsynk Login Failed Twice",
+                        message=(
+                            "Sunsynk login failed after retry. "
+                            f"Second failure: {error}."
+                        ),
+                        metadata={
+                            "attempts": 2,
+                            "retry_wait_seconds": LOGIN_RETRY_WAIT_SECONDS,
+                            "error": str(error),
+                        },
+                    )
+
+        logger.error("Unable to connect to Sunsynk API after retries: %s", last_error)
+        return None
     
     async def monitor_loop(self):
         """Main monitoring loop"""
@@ -176,50 +222,58 @@ class AlertMonitor:
             return
         
         await self.initialize()
-        
-        async with SunsynkClient(SUNSYNK_USERNAME, SUNSYNK_PASSWORD) as client:
-            logger.info("Connected to Sunsynk API")
-            
-            while True:
-                try:
-                    # Get plants
-                    plants = await client.get_plants()
-                    if not plants:
-                        logger.warning("No plants found")
-                        await asyncio.sleep(POLL_INTERVAL)
-                        continue
-                    
-                    # Get inverters
-                    inverters = await client.get_inverters()
-                    if not inverters:
-                        logger.warning("No inverters found")
-                        await asyncio.sleep(POLL_INTERVAL)
-                        continue
-                    
-                    inverter = inverters[0]
-                    
-                    # Get current data
-                    battery = await client.get_inverter_realtime_battery(inverter.sn)
-                    grid = await client.get_inverter_realtime_grid(inverter.sn)
-                    output = await client.get_inverter_realtime_output(inverter.sn)
-                    
-                    # Extract metrics
-                    battery_soc = float(getattr(battery, 'soc', 0) or 0)
-                    grid_power = grid.get_power() if hasattr(grid, 'get_power') else float(getattr(grid, 'pac', 0) or 0)
-                    grid_power = float(grid_power or 0)
-                    load_power = float(getattr(output, 'pac', 0) or 0)
-                    
-                    logger.info(f"Battery: {battery_soc}%, Grid: {grid_power}kW, Load: {load_power}kW")
-                    
-                    # Check for alerts
-                    await self.check_battery_alerts(battery_soc)
-                    await self.check_grid_alerts(grid_power)
-                    await self.check_consumption_alerts(load_power)
-                    
-                except Exception as e:
-                    logger.error(f"Error in monitoring loop: {e}", exc_info=True)
-                
-                await asyncio.sleep(POLL_INTERVAL)
+
+        while True:
+            client = await self.connect_client_with_retry()
+            if client is None:
+                await asyncio.sleep(LOGIN_RETRY_WAIT_SECONDS)
+                continue
+
+            try:
+                while True:
+                    try:
+                        plants = await client.get_plants()
+                        if not plants:
+                            logger.warning("No plants found")
+                            await asyncio.sleep(POLL_INTERVAL)
+                            continue
+
+                        inverters = await client.get_inverters()
+                        if not inverters:
+                            logger.warning("No inverters found")
+                            await asyncio.sleep(POLL_INTERVAL)
+                            continue
+
+                        inverter = inverters[0]
+
+                        battery = await client.get_inverter_realtime_battery(inverter.sn)
+                        grid = await client.get_inverter_realtime_grid(inverter.sn)
+                        output = await client.get_inverter_realtime_output(inverter.sn)
+
+                        battery_soc = float(getattr(battery, 'soc', 0) or 0)
+                        grid_power = grid.get_power() if hasattr(grid, 'get_power') else float(getattr(grid, 'pac', 0) or 0)
+                        grid_power = float(grid_power or 0)
+                        load_power = float(getattr(output, 'pac', 0) or 0)
+
+                        logger.info(f"Battery: {battery_soc}%, Grid: {grid_power}kW, Load: {load_power}kW")
+
+                        await self.check_battery_alerts(battery_soc)
+                        await self.check_grid_alerts(grid_power)
+                        await self.check_consumption_alerts(load_power)
+
+                    except (
+                        LoginRateLimitedException,
+                        InvalidCredentialsException,
+                        VerificationCodeRequiredException,
+                    ) as auth_error:
+                        logger.error("Authentication error in monitoring loop: %s", auth_error, exc_info=True)
+                        break
+                    except Exception as e:
+                        logger.error(f"Error in monitoring loop: {e}", exc_info=True)
+
+                    await asyncio.sleep(POLL_INTERVAL)
+            finally:
+                await client.close()
     
     def shutdown(self):
         """Cleanup resources"""
