@@ -4,6 +4,8 @@
 
 set -e
 
+COMPOSE_CMD=(docker compose --env-file .env -f ../docker-compose.yml)
+
 echo "🔔 Starting Sunsynk Notification System..."
 
 # Check if .env file exists
@@ -29,15 +31,15 @@ fi
 
 # Stop any existing containers
 echo "🛑 Stopping existing containers..."
-docker-compose down 2>/dev/null || true
+"${COMPOSE_CMD[@]}" down 2>/dev/null || true
 
 # Pull latest images
 echo "📦 Pulling Docker images..."
-docker-compose pull
+"${COMPOSE_CMD[@]}" pull
 
 # Start services
 echo "🚀 Starting services..."
-docker-compose up -d
+"${COMPOSE_CMD[@]}" up -d
 
 # Wait for services to be ready
 echo "⏳ Waiting for services to start..."
@@ -45,7 +47,7 @@ sleep 5
 
 # Check service health
 echo "🏥 Checking service health..."
-docker-compose ps
+"${COMPOSE_CMD[@]}" ps
 
 # Show logs
 echo ""
@@ -56,7 +58,7 @@ echo "   - Notification API: http://localhost:8000"
 echo "   - API Health: http://localhost:8000/health"
 echo "   - InfluxDB: http://localhost:8086"
 echo ""
-echo "📝 View logs with: docker-compose logs -f"
-echo "🛑 Stop system with: docker-compose down"
+echo "📝 View logs with: docker compose --env-file .env -f ../docker-compose.yml logs -f"
+echo "🛑 Stop system with: docker compose --env-file .env -f ../docker-compose.yml down"
 echo ""
 echo "🔔 Your notification system is now monitoring your Sunsynk inverter!"

@@ -15,8 +15,8 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install venv and dependencies
-      run: ./setup.sh
+      run: ./scripts/setup.sh
     - name: pylint
-      run: ./run-pylint.sh
+      run: ./scripts/run-pylint.sh
     - name: Tests
       run: ./run-tests.sh

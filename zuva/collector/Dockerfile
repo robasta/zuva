@@ -18,11 +18,11 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -e .
 
 # Copy collector requirements and install
-COPY sunsynk-dashboard/collector/requirements.txt .
+COPY zuva/collector/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy collector code
-COPY sunsynk-dashboard/collector/ /app/collector/
+COPY zuva/collector/ /app/collector/
 
 # Set Python path to include all directories
 ENV PYTHONPATH="/app:/app/collector"

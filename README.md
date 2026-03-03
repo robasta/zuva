@@ -24,7 +24,7 @@ A lightweight notification system for Sunsynk solar inverters that sends alerts 
 1. Clone the repository:
 ```bash
 git clone https://github.com/yourusername/sunsynk-api-client.git
-cd sunsynk-api-client/sunsynk-dashboard
+cd sunsynk-api-client/zuva
 ```
 
 2. Create environment file:
@@ -44,7 +44,7 @@ cp .env.template .env
 
 4. Start the system:
 ```bash
-docker-compose up -d
+docker compose --env-file .env -f ../docker-compose.yml up -d
 ```
 
 ## Configuration
@@ -129,28 +129,30 @@ The system consists of three main components:
 
 ```bash
 # Install Python dependencies
-cd sunsynk-dashboard
-pip install -r notification_service/requirements.txt
+pip install -r zuva_api/requirements.txt
+cd zuva
 pip install -r collector/requirements.txt
 
 # Run notification service
-python -m notification_service.main
+cd ..
+python -m zuva_api.main
 
 # Run alert monitor (in separate terminal)
+cd zuva
 python -m collector.alert_monitor
 ```
 
 ## Troubleshooting
 
 **No notifications received:**
-- Check that services are running: `docker-compose ps`
+- Check that services are running: `docker compose --env-file zuva/.env -f docker-compose.yml ps`
 - Verify credentials in .env file
-- Check logs: `docker-compose logs -f notification-api`
+- Check logs: `docker compose --env-file zuva/.env -f docker-compose.yml logs -f zuva-api`
 - Test Telegram bot: Send `/start` to your bot
 
 **Alert Monitor not connecting:**
 - Verify Sunsynk credentials
-- Check logs: `docker-compose logs -f alert-monitor`
+- Check logs: `docker compose --env-file zuva/.env -f docker-compose.yml logs -f alert-monitor`
 - Ensure InfluxDB is running: `curl http://localhost:8086/health`
 
 ## License

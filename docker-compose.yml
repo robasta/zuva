@@ -19,10 +19,12 @@ services:
     networks:
       - sunsynk-network
 
-  # Notification API Service (Docker Hub image)
-  notification-api:
-    image: robasta/sunsynk-notification-api:latest
-    container_name: sunsynk-notification-api
+  # Zuva API Service
+  zuva-api:
+    build:
+      context: .
+      dockerfile: zuva_api/Dockerfile
+    container_name: zuva-api
     restart: unless-stopped
     ports:
       - "8000:8000"
@@ -39,10 +41,12 @@ services:
     networks:
       - sunsynk-network
 
-  # Alert Monitor Service (Docker Hub image)
+  # Alert Monitor Service
   alert-monitor:
-    image: robasta/sunsynk-alert-monitor:latest
-    container_name: sunsynk-alert-monitor
+    build:
+      context: .
+      dockerfile: zuva/collector/Dockerfile
+    container_name: zuva
     restart: unless-stopped
     environment:
       - SUNSYNK_USERNAME=${SUNSYNK_USERNAME}
@@ -51,7 +55,7 @@ services:
       - INFLUXDB_TOKEN=sunsynk-token
       - INFLUXDB_ORG=sunsynk
       - INFLUXDB_BUCKET=solar_data
-      - NOTIFICATION_API_URL=http://notification-api:8000
+      - NOTIFICATION_API_URL=http://zuva-api:8000
       - DEFAULT_USER_ID=${DEFAULT_USER_ID}
       - POLL_INTERVAL=${POLL_INTERVAL:-600}
       - BATTERY_LOW_THRESHOLD=${BATTERY_LOW_THRESHOLD:-20}
@@ -59,7 +63,9 @@ services:
       - HIGH_CONSUMPTION_THRESHOLD=${HIGH_CONSUMPTION_THRESHOLD:-400}
     depends_on:
       - influxdb
-      - notification-api
+      - zuva-api
+    volumes:
+      - ./sunsynk:/app/sunsynk
     networks:
       - sunsynk-network
 

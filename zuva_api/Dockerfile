@@ -3,11 +3,11 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copy requirements and install dependencies
-COPY notification_service/requirements.txt .
+COPY zuva_api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy notification service code
-COPY notification_service/ /app/notification_service/
+COPY zuva_api/ /app/zuva_api/
 
 # Run the service
-CMD ["python", "-m", "notification_service.main"]
+CMD ["python", "-m", "zuva_api.main"]

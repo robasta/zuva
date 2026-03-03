@@ -30,7 +30,10 @@ async def test_notification_api():
                     return False
     except Exception as e:
         print(f"❌ Failed to connect to API: {e}")
-        print(f"   Make sure the service is running: docker-compose up -d")
+        print(
+            "   Make sure the service is running: "
+            "docker compose --env-file .env -f ../docker-compose.yml up -d"
+        )
         return False
 
 
@@ -128,7 +131,7 @@ async def main():
     print("\nNext steps:")
     print("  1. Configure your Telegram chat ID")
     print("  2. Set up user settings via POST /settings")
-    print("  3. Monitor logs: docker-compose logs -f")
+    print("  3. Monitor logs: docker compose --env-file .env -f ../docker-compose.yml logs -f")
     print("\n🌞 Your notification system is ready!")
 
 

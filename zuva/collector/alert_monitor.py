@@ -7,7 +7,6 @@ import logging
 import os
 import sys
 from datetime import datetime, time
-from typing import Optional
 import aiohttp
 
 from influxdb_client import InfluxDBClient
@@ -30,13 +29,14 @@ INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "sunsynk-token")
 INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "sunsynk")
 INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "solar_data")
 
-NOTIFICATION_API_URL = os.getenv("NOTIFICATION_API_URL", "http://notification-api:8000")
+NOTIFICATION_API_URL = os.getenv("NOTIFICATION_API_URL", "http://zuva-api:8000")
 DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "robasta")
 
 # Alert Thresholds
 BATTERY_LOW_THRESHOLD = float(os.getenv("BATTERY_LOW_THRESHOLD", "20"))  # %
 BATTERY_CRITICAL_THRESHOLD = float(os.getenv("BATTERY_CRITICAL_THRESHOLD", "10"))  # %
 HIGH_CONSUMPTION_THRESHOLD = float(os.getenv("HIGH_CONSUMPTION_THRESHOLD", "5"))  # kW
+EVENING_CONSUMPTION_THRESHOLD = float(os.getenv("EVENING_CONSUMPTION_THRESHOLD", "900"))  # kW
 
 
 class AlertMonitor:
@@ -85,8 +85,6 @@ class AlertMonitor:
     
     async def check_battery_alerts(self, battery_soc: float):
         """Check battery SOC and send alerts if needed"""
-        now = datetime.now()
-        
         # Critical battery
         if battery_soc <= BATTERY_CRITICAL_THRESHOLD:
             if self.last_battery_alert != "critical":
@@ -151,24 +149,24 @@ class AlertMonitor:
 
         # Evening (18:00-23:00): high severity if > 900 kW
         if time(18, 0) <= now < time(23, 0):
-            if load_power > 900:
+            if load_power > EVENING_CONSUMPTION_THRESHOLD:
                 await self.send_alert(
                     category="high_consumption",
                     severity="high",
                     title="📊 High Energy Consumption",
-                    message=f"Evening consumption is high at {load_power:.2f} kW (limit 900 kW).",
-                    metadata={"load_power": load_power, "limit_kw": 900}
+                    message=f"Evening consumption is high at {load_power:.2f} kW (limit {EVENING_CONSUMPTION_THRESHOLD:.0f} kW).",
+                    metadata={"load_power": load_power, "limit_kw": EVENING_CONSUMPTION_THRESHOLD}
                 )
             return
 
-        # Night (23:00-06:00): critical severity if > 400 kW
-        if load_power > 400:
+        # Night (23:00-06:00): critical severity if above configured threshold
+        if load_power > HIGH_CONSUMPTION_THRESHOLD:
             await self.send_alert(
                 category="high_consumption",
                 severity="critical",
                 title="🚨 Critical Night Consumption",
-                message=f"Night consumption is high at {load_power:.2f} kW (limit 400 kW).",
-                metadata={"load_power": load_power, "limit_kw": 400}
+                message=f"Night consumption is high at {load_power:.2f} kW (limit {HIGH_CONSUMPTION_THRESHOLD:.2f} kW).",
+                metadata={"load_power": load_power, "limit_kw": HIGH_CONSUMPTION_THRESHOLD}
             )
     
     async def monitor_loop(self):
@@ -190,8 +188,6 @@ class AlertMonitor:
                         logger.warning("No plants found")
                         await asyncio.sleep(POLL_INTERVAL)
                         continue
-                    
-                    plant = plants[0]
                     
                     # Get inverters
                     inverters = await client.get_inverters()

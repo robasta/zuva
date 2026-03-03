@@ -30,14 +30,14 @@ Models representing electrical measurements (`Battery`, `Grid`, `Input`) impleme
 
 ### Environment Setup
 ```bash
-./setup.sh  # Creates venv and installs deps
+./scripts/setup.sh  # Creates venv and installs deps
 ```
 
 ### Testing & Quality
 - Tests use pytest with async support and aiohttp_client fixture
 - Mock API server pattern in `tests/mock_api_server.py` - extend this for new endpoints
 - Run tests: `./run-tests.sh` (uses pytest with coverage)
-- Linting: `./run-pylint.sh` (pylint only, no other formatters)
+- Linting: `./scripts/run-pylint.sh` (pylint only, no other formatters)
 
 ### Version Management
 - Git tag-based versioning via `sunsynk/version_info.py`
@@ -50,7 +50,7 @@ Models representing electrical measurements (`Battery`, `Grid`, `Input`) impleme
 - `sunsynk/client.py` - Main API client with auth handling
 - `sunsynk/resource.py` - Base class for all data models
 - `tests/mock_api_server.py` - Extensible mock for testing
-- `magic.py` - Example usage script for local testing
+- `examples/magic.py` - Example usage script for local testing
 
 ### External Dependencies
 - `aiohttp` - HTTP client (not requests)

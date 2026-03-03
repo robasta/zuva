@@ -131,12 +131,12 @@ dmypy.json
 .pyre/
 
 # Sunsynk Dashboard specific
-sunsynk-dashboard/backend/*.log
-sunsynk-dashboard/backend/nohup.out
-sunsynk-dashboard/frontend/node_modules/
-sunsynk-dashboard/frontend/build/
-sunsynk-dashboard/frontend/.env.local
-sunsynk-dashboard/simple-frontend/
+zuva/backend/*.log
+zuva/backend/nohup.out
+zuva/frontend/node_modules/
+zuva/frontend/build/
+zuva/frontend/.env.local
+zuva/simple-frontend/
 
 # Docker volumes
 docker-data/
@@ -181,10 +181,10 @@ yarn-debug.log*
 yarn-error.log*
 
 # Dashboard specific
-sunsynk-dashboard/.env
-sunsynk-dashboard/logs/
-sunsynk-dashboard/data/
-sunsynk-dashboard/backup/
-sunsynk-dashboard/node_modules/
+zuva/.env
+zuva/logs/
+zuva/data/
+zuva/backup/
+zuva/node_modules/
 
 deployment.md

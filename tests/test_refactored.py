@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 from sunsynk.client import SunsynkClient
 
-load_dotenv('sunsynk-dashboard/.env')
+load_dotenv('zuva/.env')
 
 
 async def main():

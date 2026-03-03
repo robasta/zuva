@@ -3,17 +3,16 @@ Sunsynk Notification Service
 Simplified service for sending Telegram notifications
 based on solar inverter alerts.
 """
-import asyncio
 import logging
 import os
-from datetime import datetime, time
+from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
@@ -78,7 +77,7 @@ class Alert(BaseModel):
     severity: AlertSeverity
     title: str
     message: str
-    metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 # Data storage
@@ -92,11 +91,7 @@ class UserSettings:
     quiet_hours_end: str = "07:00"
     min_severity: str = "medium"
     rate_limit_minutes: int = 15
-    last_alert_times: Dict[str, datetime] = None
-
-    def __post_init__(self):
-        if self.last_alert_times is None:
-            self.last_alert_times = {}
+    last_alert_times: Dict[str, datetime] = field(default_factory=dict)
 
 
 class NotificationService:
@@ -239,7 +234,7 @@ class NotificationService:
     async def send_alert(self, alert: Alert, user_id: str = DEFAULT_USER_ID):
         """Send alert to user via configured channels"""
         if alert.category == AlertCategory.BATTERY_CRITICAL and alert.severity != AlertSeverity.CRITICAL:
-            alert = alert.copy(update={"severity": AlertSeverity.CRITICAL})
+            alert = alert.model_copy(update={"severity": AlertSeverity.CRITICAL})
 
         settings = self.user_settings.get(user_id)
         if not settings:

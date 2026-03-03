@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 
 from setuptools import setup, find_packages
 
@@ -6,8 +6,12 @@ from sunsynk.version_info import Version
 
 Version.generate()
 
-with open(os.path.abspath(os.path.join(os.path.dirname(__file__), 'requirements.txt'))) as f:
-    install_reqs = f.read().splitlines()
+requirements_path = Path(__file__).resolve().parent / 'requirements.txt'
+install_reqs = [
+    line.strip()
+    for line in requirements_path.read_text().splitlines()
+    if line.strip() and not line.strip().startswith('#')
+]
 
 setup(
     name='sunsynk-api-client',
