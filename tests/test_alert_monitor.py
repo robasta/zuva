@@ -81,3 +81,41 @@ async def test_connect_client_with_retry_sends_critical_alert_after_second_failu
     assert kwargs["severity"] == "critical"
     assert kwargs["metadata"]["attempts"] == 2
     assert kwargs["metadata"]["retry_wait_seconds"] == 900
+
+
+@pytest.mark.asyncio
+async def test_connect_client_with_retry_connectivity_failure_uses_connectivity_alert_title(monkeypatch):
+    instances = []
+
+    class FakeClient:
+        def __init__(self, username, password):
+            self.username = username
+            self.password = password
+            self.closed = False
+            instances.append(self)
+
+        async def login(self):
+            raise monitor_module.SunsynkConnectionError("internet down")
+
+        async def close(self):
+            self.closed = True
+
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr(monitor_module, "SunsynkClient", FakeClient)
+    monkeypatch.setattr(monitor_module, "SUNSYNK_USERNAME", "user")
+    monkeypatch.setattr(monitor_module, "SUNSYNK_PASSWORD", "pass")
+    monkeypatch.setattr(monitor_module, "LOGIN_RETRY_WAIT_SECONDS", 900)
+    monkeypatch.setattr(monitor_module.asyncio, "sleep", sleep_mock)
+
+    monitor = monitor_module.AlertMonitor()
+    monitor.send_alert = AsyncMock()
+
+    client = await monitor.connect_client_with_retry()
+
+    assert client is None
+    assert all(client_instance.closed for client_instance in instances)
+    sleep_mock.assert_awaited_once_with(900)
+    monitor.send_alert.assert_awaited_once()
+
+    _, kwargs = monitor.send_alert.await_args
+    assert kwargs["title"] == "🚨 Sunsynk Connectivity Failed Twice"

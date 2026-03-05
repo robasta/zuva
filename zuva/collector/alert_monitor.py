@@ -18,6 +18,9 @@ from sunsynk import SunsynkClient
 from sunsynk.client import (
     InvalidCredentialsException,
     LoginRateLimitedException,
+    SunsynkApiError,
+    SunsynkConnectionError,
+    SunsynkTimeoutError,
     VerificationCodeRequiredException,
 )
 
@@ -184,6 +187,33 @@ class AlertMonitor:
                 await client.login()
                 logger.info("Connected to Sunsynk API")
                 return client
+            except (SunsynkTimeoutError, SunsynkConnectionError, SunsynkApiError) as error:
+                last_error = error
+                await client.close()
+
+                if attempt == 1:
+                    logger.warning(
+                        "Sunsynk connectivity attempt 1 failed: %s. Retrying in %s seconds.",
+                        error,
+                        LOGIN_RETRY_WAIT_SECONDS,
+                    )
+                    await asyncio.sleep(LOGIN_RETRY_WAIT_SECONDS)
+                else:
+                    logger.critical("Sunsynk connectivity attempt 2 failed: %s", error)
+                    await self.send_alert(
+                        category="sunsynk_login_failure",
+                        severity="critical",
+                        title="🚨 Sunsynk Connectivity Failed Twice",
+                        message=(
+                            "Unable to reach Sunsynk API after retry. "
+                            f"Second failure: {error}."
+                        ),
+                        metadata={
+                            "attempts": 2,
+                            "retry_wait_seconds": LOGIN_RETRY_WAIT_SECONDS,
+                            "error": str(error),
+                        },
+                    )
             except Exception as error:
                 last_error = error
                 await client.close()
@@ -268,6 +298,8 @@ class AlertMonitor:
                     ) as auth_error:
                         logger.error("Authentication error in monitoring loop: %s", auth_error, exc_info=True)
                         break
+                    except (SunsynkTimeoutError, SunsynkConnectionError, SunsynkApiError) as network_error:
+                        logger.warning("Connectivity error in monitoring loop: %s", network_error, exc_info=True)
                     except Exception as e:
                         logger.error(f"Error in monitoring loop: {e}", exc_info=True)
 

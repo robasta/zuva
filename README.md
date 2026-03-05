@@ -57,6 +57,12 @@ BATTERY_LOW_THRESHOLD=20        # Alert when battery below 20%
 BATTERY_CRITICAL_THRESHOLD=10   # Critical alert below 10%
 HIGH_CONSUMPTION_THRESHOLD=5    # Alert when load exceeds 5 kW
 POLL_INTERVAL=60               # Check inverter every 60 seconds
+
+# Sunsynk network resilience
+SUNSYNK_REQUEST_TIMEOUT_SECONDS=20
+SUNSYNK_CONNECT_TIMEOUT_SECONDS=10
+SUNSYNK_MAX_RETRIES=3
+SUNSYNK_RETRY_BASE_DELAY_SECONDS=0.5
 ```
 
 ## Managing Notification Settings
@@ -154,6 +160,19 @@ python -m collector.alert_monitor
 - Verify Sunsynk credentials
 - Check logs: `docker compose --env-file zuva/.env -f docker-compose.yml logs -f alert-monitor`
 - Ensure InfluxDB is running: `curl http://localhost:8086/health`
+
+## Network Error Handling
+
+The client now handles transient connectivity failures more gracefully:
+
+- Retries transient connection/timeout failures with exponential backoff (`SUNSYNK_MAX_RETRIES`, `SUNSYNK_RETRY_BASE_DELAY_SECONDS`)
+- Uses configurable connect/request timeouts (`SUNSYNK_CONNECT_TIMEOUT_SECONDS`, `SUNSYNK_REQUEST_TIMEOUT_SECONDS`)
+- Raises explicit exceptions:
+  - `SunsynkConnectionError` for connection-level failures
+  - `SunsynkTimeoutError` for timeout failures
+  - `SunsynkApiError` for non-200 API responses on data endpoints
+
+Authentication-related behavior remains unchanged (`InvalidCredentialsException`, `VerificationCodeRequiredException`, `LoginRateLimitedException`).
 
 ## License
 

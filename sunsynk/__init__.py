@@ -3,6 +3,15 @@ def __getattr__(name):
     if name == 'SunsynkClient':
         from sunsynk.client import SunsynkClient
         return SunsynkClient
+    elif name == 'SunsynkApiError':
+        from sunsynk.client import SunsynkApiError
+        return SunsynkApiError
+    elif name == 'SunsynkConnectionError':
+        from sunsynk.client import SunsynkConnectionError
+        return SunsynkConnectionError
+    elif name == 'SunsynkTimeoutError':
+        from sunsynk.client import SunsynkTimeoutError
+        return SunsynkTimeoutError
     elif name == 'Battery':
         from sunsynk.battery import Battery
         return Battery
@@ -25,6 +34,9 @@ def __getattr__(name):
 
 __all__ = [
     'SunsynkClient',
+    'SunsynkApiError',
+    'SunsynkConnectionError',
+    'SunsynkTimeoutError',
     'Battery',
     'Grid',
     'Input',
