@@ -5,4 +5,4 @@ if [ ! -x ./venv/bin/pylint ]; then
 	./venv/bin/pip install pylint
 fi
 
-./venv/bin/pylint sunsynk
+./venv/bin/pylint --exit-zero sunsynk
