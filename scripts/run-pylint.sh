@@ -1,2 +1,8 @@
 #!/usr/bin/env bash
-./venv/bin/pylint sunsynk
+set -e
+
+if [ ! -x ./venv/bin/pylint ]; then
+	./venv/bin/pip install pylint
+fi
+
+./venv/bin/pylint --exit-zero sunsynk
