@@ -152,12 +152,12 @@ class AlertMonitor:
         """Check for high consumption"""
         now = datetime.now().time()
 
-        # Daytime (06:00-18:00): no alert due to sunlight
-        if time(6, 0) <= now < time(18, 0):
+        # Daytime (05:00-18:00): no alert due to sunlight
+        if time(5, 0) <= now < time(18, 0):
             return
 
-        # Evening (18:00-23:00): high severity if > 900 kW
-        if time(18, 0) <= now < time(23, 0):
+        # Evening (18:00-22:00): high severity if > 900 kW
+        if time(18, 0) <= now < time(22, 0):
             if load_power > EVENING_CONSUMPTION_THRESHOLD:
                 await self.send_alert(
                     category="high_consumption",
@@ -168,7 +168,7 @@ class AlertMonitor:
                 )
             return
 
-        # Night (23:00-06:00): critical severity if above configured threshold
+        # Night (22:00-05:00): critical severity if above configured threshold
         if load_power > HIGH_CONSUMPTION_THRESHOLD:
             await self.send_alert(
                 category="high_consumption",
