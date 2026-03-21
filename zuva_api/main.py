@@ -407,4 +407,5 @@ async def get_alert_history(user_id: str, hours: int = 24):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    api_port = int(os.getenv("API_PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=api_port)

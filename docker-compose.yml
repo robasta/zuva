@@ -29,6 +29,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - API_PORT=8000
       - INFLUXDB_URL=http://influxdb:8086
       - INFLUXDB_TOKEN=sunsynk-token
       - INFLUXDB_ORG=sunsynk
