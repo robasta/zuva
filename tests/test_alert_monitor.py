@@ -119,3 +119,131 @@ async def test_connect_client_with_retry_connectivity_failure_uses_connectivity_
 
     _, kwargs = monitor.send_alert.await_args
     assert kwargs["title"] == "🚨 Sunsynk Connectivity Failed Twice"
+
+
+@pytest.mark.asyncio
+async def test_grid_alert_no_alert_on_single_outage_reading():
+    monitor = monitor_module.AlertMonitor()
+    monitor.send_alert = AsyncMock()
+    monitor.last_grid_status = True
+
+    await monitor.check_grid_alerts(0.0, 0.0, 0)
+
+    monitor.send_alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_grid_alert_fires_after_consecutive_outage_readings(monkeypatch):
+    monkeypatch.setattr(monitor_module, "GRID_OUTAGE_CONSECUTIVE_READINGS", 3)
+
+    monitor = monitor_module.AlertMonitor()
+    monitor.send_alert = AsyncMock()
+    monitor.last_grid_status = True
+
+    for _ in range(3):
+        await monitor.check_grid_alerts(0.0, 0.0, 0)
+
+    monitor.send_alert.assert_awaited_once()
+    _, kwargs = monitor.send_alert.await_args
+    assert kwargs["category"] == "grid_outage"
+
+
+@pytest.mark.asyncio
+async def test_grid_alert_counter_resets_on_intermittent_recovery(monkeypatch):
+    monkeypatch.setattr(monitor_module, "GRID_OUTAGE_CONSECUTIVE_READINGS", 3)
+
+    monitor = monitor_module.AlertMonitor()
+    monitor.send_alert = AsyncMock()
+    monitor.last_grid_status = True
+
+    await monitor.check_grid_alerts(0.0, 0.0, 0)
+    await monitor.check_grid_alerts(0.0, 0.0, 0)
+    await monitor.check_grid_alerts(5.0, 230.0, 1)
+    await monitor.check_grid_alerts(0.0, 0.0, 0)
+
+    monitor.send_alert.assert_not_awaited()
+    assert monitor.grid_outage_consecutive_count == 1
+
+
+@pytest.mark.asyncio
+async def test_grid_alert_no_false_positive_when_power_low_but_voltage_normal():
+    monitor = monitor_module.AlertMonitor()
+    monitor.send_alert = AsyncMock()
+    monitor.last_grid_status = True
+
+    for _ in range(5):
+        await monitor.check_grid_alerts(0.05, 230.0, 1)
+
+    monitor.send_alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_grid_alert_ambiguous_when_voltage_is_none():
+    monitor = monitor_module.AlertMonitor()
+    monitor.send_alert = AsyncMock()
+    monitor.last_grid_status = True
+    monitor.grid_outage_consecutive_count = 2
+    monitor.grid_restore_consecutive_count = 1
+
+    await monitor.check_grid_alerts(0.0, None, 0)
+    await monitor.check_grid_alerts(0.0, None, 0)
+    await monitor.check_grid_alerts(0.0, None, 0)
+
+    monitor.send_alert.assert_not_awaited()
+    assert monitor.grid_outage_consecutive_count == 2
+    assert monitor.grid_restore_consecutive_count == 1
+    assert monitor.last_grid_status is True
+
+
+@pytest.mark.asyncio
+async def test_grid_alert_cooldown_prevents_repeat_alerts(monkeypatch):
+    monkeypatch.setattr(monitor_module, "GRID_OUTAGE_CONSECUTIVE_READINGS", 1)
+
+    monitor = monitor_module.AlertMonitor()
+    monitor.send_alert = AsyncMock()
+    monitor.last_grid_status = True
+
+    await monitor.check_grid_alerts(0.0, 0.0, 0)
+    assert monitor.send_alert.await_count == 1
+
+    monitor.last_grid_status = True
+    monitor.grid_outage_consecutive_count = 0
+    monitor.grid_restore_consecutive_count = 0
+
+    await monitor.check_grid_alerts(0.0, 0.0, 0)
+
+    assert monitor.send_alert.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_grid_restore_alert_fires_after_consecutive_active_readings(monkeypatch):
+    monkeypatch.setattr(monitor_module, "GRID_OUTAGE_CONSECUTIVE_READINGS", 3)
+
+    monitor = monitor_module.AlertMonitor()
+    monitor.send_alert = AsyncMock()
+    monitor.last_grid_status = False
+
+    for _ in range(3):
+        await monitor.check_grid_alerts(5.0, 230.0, 1)
+
+    monitor.send_alert.assert_awaited_once()
+    _, kwargs = monitor.send_alert.await_args
+    assert kwargs["category"] == "grid_restored"
+
+
+@pytest.mark.asyncio
+async def test_grid_alert_metadata_includes_voltage_and_status(monkeypatch):
+    monkeypatch.setattr(monitor_module, "GRID_OUTAGE_CONSECUTIVE_READINGS", 1)
+
+    monitor = monitor_module.AlertMonitor()
+    monitor.send_alert = AsyncMock()
+    monitor.last_grid_status = True
+
+    await monitor.check_grid_alerts(0.0, 0.0, 0)
+
+    monitor.send_alert.assert_awaited_once()
+    _, kwargs = monitor.send_alert.await_args
+    metadata = kwargs["metadata"]
+    assert "grid_voltage" in metadata
+    assert "grid_status" in metadata
+    assert "consecutive_readings" in metadata

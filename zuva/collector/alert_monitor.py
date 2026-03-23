@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 import aiohttp
 
 from influxdb_client import InfluxDBClient
@@ -46,6 +46,9 @@ BATTERY_LOW_THRESHOLD = float(os.getenv("BATTERY_LOW_THRESHOLD", "20"))  # %
 BATTERY_CRITICAL_THRESHOLD = float(os.getenv("BATTERY_CRITICAL_THRESHOLD", "10"))  # %
 HIGH_CONSUMPTION_THRESHOLD = float(os.getenv("HIGH_CONSUMPTION_THRESHOLD", "5"))  # kW
 EVENING_CONSUMPTION_THRESHOLD = float(os.getenv("EVENING_CONSUMPTION_THRESHOLD", "900"))  # kW
+GRID_OUTAGE_CONSECUTIVE_READINGS = int(os.getenv("GRID_OUTAGE_CONSECUTIVE_READINGS", "3"))
+GRID_VOLTAGE_THRESHOLD = float(os.getenv("GRID_VOLTAGE_THRESHOLD", "50.0"))
+GRID_OUTAGE_COOLDOWN_MINUTES = int(os.getenv("GRID_OUTAGE_COOLDOWN_MINUTES", "30"))
 
 
 class AlertMonitor:
@@ -56,6 +59,9 @@ class AlertMonitor:
         self.write_api = None
         self.query_api = None
         self.last_grid_status = None
+        self.grid_outage_consecutive_count = 0
+        self.grid_restore_consecutive_count = 0
+        self.last_grid_outage_alert_time = None
         self.last_battery_alert = None
         
     async def initialize(self):
@@ -122,31 +128,67 @@ class AlertMonitor:
         elif battery_soc > BATTERY_LOW_THRESHOLD + 5:  # Add hysteresis
             self.last_battery_alert = None
     
-    async def check_grid_alerts(self, grid_power: float):
+    async def check_grid_alerts(self, grid_power: float, grid_voltage: float | None, grid_status: int | None):
         """Check grid status and send alerts on outages/restoration"""
-        grid_active = abs(grid_power) > 0.1  # Grid is active if power flow > 0.1 kW
-        
-        # Grid outage detected
-        if not grid_active and self.last_grid_status is True:
-            await self.send_alert(
-                category="grid_outage",
-                severity="high",
-                title="⚡ Grid Outage Detected",
-                message="The grid has gone offline. Your system is now running on battery power.",
-                metadata={"grid_power": grid_power}
+
+        # Missing voltage is ambiguous; do not change outage/restoration state.
+        if grid_voltage is None:
+            return
+
+        grid_looks_down = abs(grid_power) <= 0.1 and grid_voltage < GRID_VOLTAGE_THRESHOLD
+
+        if grid_looks_down:
+            self.grid_restore_consecutive_count = 0
+            self.grid_outage_consecutive_count += 1
+
+            cooldown_elapsed = (
+                self.last_grid_outage_alert_time is None
+                or datetime.now() - self.last_grid_outage_alert_time >= timedelta(minutes=GRID_OUTAGE_COOLDOWN_MINUTES)
             )
-        
-        # Grid restored
-        elif grid_active and self.last_grid_status is False:
+
+            if (
+                self.grid_outage_consecutive_count >= GRID_OUTAGE_CONSECUTIVE_READINGS
+                and cooldown_elapsed
+            ):
+                await self.send_alert(
+                    category="grid_outage",
+                    severity="high",
+                    title="⚡ Grid Outage Detected",
+                    message="The grid has gone offline. Your system is now running on battery power.",
+                    metadata={
+                        "grid_power": grid_power,
+                        "grid_voltage": grid_voltage,
+                        "grid_status": grid_status,
+                        "consecutive_readings": self.grid_outage_consecutive_count,
+                    }
+                )
+                self.last_grid_outage_alert_time = datetime.now()
+                self.last_grid_status = False
+            return
+
+        self.grid_outage_consecutive_count = 0
+        self.grid_restore_consecutive_count += 1
+
+        if (
+            self.last_grid_status is False
+            and self.grid_restore_consecutive_count >= GRID_OUTAGE_CONSECUTIVE_READINGS
+        ):
             await self.send_alert(
                 category="grid_restored",
                 severity="medium",
                 title="✅ Grid Power Restored",
                 message="Grid power has been restored. Normal operation resumed.",
-                metadata={"grid_power": grid_power}
+                metadata={
+                    "grid_power": grid_power,
+                    "grid_voltage": grid_voltage,
+                    "grid_status": grid_status,
+                    "consecutive_readings": self.grid_restore_consecutive_count,
+                }
             )
-        
-        self.last_grid_status = grid_active
+            self.last_grid_status = True
+            self.grid_restore_consecutive_count = 0
+        elif self.last_grid_status is None or self.last_grid_status is True:
+            self.last_grid_status = True
     
     async def check_consumption_alerts(self, load_power: float):
         """Check for high consumption"""
@@ -283,12 +325,15 @@ class AlertMonitor:
                         battery_soc = float(getattr(battery, 'soc', 0) or 0)
                         grid_power = grid.get_power() if hasattr(grid, 'get_power') else float(getattr(grid, 'pac', 0) or 0)
                         grid_power = float(grid_power or 0)
+                        grid_voltage = grid.get_voltage()
+                        grid_voltage = float(grid_voltage) if grid_voltage is not None else None
+                        grid_status = getattr(grid, 'status', None)
                         load_power = float(getattr(output, 'pac', 0) or 0)
 
                         logger.info(f"Battery: {battery_soc}%, Grid: {grid_power}kW, Load: {load_power}kW")
 
                         await self.check_battery_alerts(battery_soc)
-                        await self.check_grid_alerts(grid_power)
+                        await self.check_grid_alerts(grid_power, grid_voltage, grid_status)
                         await self.check_consumption_alerts(load_power)
 
                     except (
