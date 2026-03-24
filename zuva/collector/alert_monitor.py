@@ -63,6 +63,7 @@ class AlertMonitor:
         self.grid_restore_consecutive_count = 0
         self.last_grid_outage_alert_time = None
         self.last_battery_alert = None
+        self.grid_outage_blocked = False  # Block further outage alerts until restore
         
     async def initialize(self):
         """Initialize InfluxDB connection"""
@@ -139,33 +140,31 @@ class AlertMonitor:
 
         if grid_looks_down:
             self.grid_restore_consecutive_count = 0
-            self.grid_outage_consecutive_count += 1
+            if not self.grid_outage_blocked:
+                self.grid_outage_consecutive_count += 1
 
-            cooldown_elapsed = (
-                self.last_grid_outage_alert_time is None
-                or datetime.now() - self.last_grid_outage_alert_time >= timedelta(minutes=GRID_OUTAGE_COOLDOWN_MINUTES)
-            )
-
-            if (
-                self.grid_outage_consecutive_count >= GRID_OUTAGE_CONSECUTIVE_READINGS
-                and cooldown_elapsed
-            ):
-                await self.send_alert(
-                    category="grid_outage",
-                    severity="high",
-                    title="⚡ Grid Outage Detected",
-                    message="The grid has gone offline. Your system is now running on battery power.",
-                    metadata={
-                        "grid_power": grid_power,
-                        "grid_voltage": grid_voltage,
-                        "grid_status": grid_status,
-                        "consecutive_readings": self.grid_outage_consecutive_count,
-                    }
-                )
-                self.last_grid_outage_alert_time = datetime.now()
-                self.last_grid_status = False
+                if self.grid_outage_consecutive_count <= GRID_OUTAGE_CONSECUTIVE_READINGS:
+                    # Only send alert for the first 3 consecutive readings
+                    await self.send_alert(
+                        category="grid_outage",
+                        severity="high",
+                        title="⚡ Grid Outage Detected",
+                        message="The grid has gone offline. Your system is now running on battery power.",
+                        metadata={
+                            "grid_power": grid_power,
+                            "grid_voltage": grid_voltage,
+                            "grid_status": grid_status,
+                            "consecutive_readings": self.grid_outage_consecutive_count,
+                        }
+                    )
+                    self.last_grid_outage_alert_time = datetime.now()
+                    self.last_grid_status = False
+                    if self.grid_outage_consecutive_count == GRID_OUTAGE_CONSECUTIVE_READINGS:
+                        self.grid_outage_blocked = True  # Block further outage alerts until restore
+                # If count > 3, do nothing (blocked)
             return
 
+        # Grid is up
         self.grid_outage_consecutive_count = 0
         self.grid_restore_consecutive_count += 1
 
@@ -178,6 +177,8 @@ class AlertMonitor:
                 severity="medium",
                 title="✅ Grid Power Restored",
                 message="Grid power has been restored. Normal operation resumed.",
+            )
+            self.grid_outage_blocked = False  # Allow outage alerts again
                 metadata={
                     "grid_power": grid_power,
                     "grid_voltage": grid_voltage,
