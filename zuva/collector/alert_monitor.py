@@ -142,9 +142,7 @@ class AlertMonitor:
             self.grid_restore_consecutive_count = 0
             if not self.grid_outage_blocked:
                 self.grid_outage_consecutive_count += 1
-
-                if self.grid_outage_consecutive_count <= GRID_OUTAGE_CONSECUTIVE_READINGS:
-                    # Only send alert for the first 3 consecutive readings
+                if self.grid_outage_consecutive_count == GRID_OUTAGE_CONSECUTIVE_READINGS:
                     await self.send_alert(
                         category="grid_outage",
                         severity="high",
@@ -159,9 +157,7 @@ class AlertMonitor:
                     )
                     self.last_grid_outage_alert_time = datetime.now()
                     self.last_grid_status = False
-                    if self.grid_outage_consecutive_count == GRID_OUTAGE_CONSECUTIVE_READINGS:
-                        self.grid_outage_blocked = True  # Block further outage alerts until restore
-                # If count > 3, do nothing (blocked)
+                    self.grid_outage_blocked = True  # Block further outage alerts until restore
             return
 
         # Grid is up
@@ -177,8 +173,6 @@ class AlertMonitor:
                 severity="medium",
                 title="✅ Grid Power Restored",
                 message="Grid power has been restored. Normal operation resumed.",
-            )
-            self.grid_outage_blocked = False  # Allow outage alerts again
                 metadata={
                     "grid_power": grid_power,
                     "grid_voltage": grid_voltage,
@@ -186,6 +180,7 @@ class AlertMonitor:
                     "consecutive_readings": self.grid_restore_consecutive_count,
                 }
             )
+            self.grid_outage_blocked = False  # Allow outage alerts again
             self.last_grid_status = True
             self.grid_restore_consecutive_count = 0
         elif self.last_grid_status is None or self.last_grid_status is True:
