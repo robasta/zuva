@@ -1,32 +1,43 @@
 name: Release
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    branches:
-      - 'release/*'
-    types:
-      - completed
+  push:
+    tags:
+      - "v*"
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11']
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install venv and dependencies
+      run: ./scripts/setup.sh
+    - name: Run tests
+      run: ./run-tests.sh
+
   publish:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    needs: test
     runs-on: ubuntu-latest
     env:
       DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
     steps:
     - uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.workflow_run.head_sha }}
         fetch-depth: 0
         fetch-tags: true
 
     - name: Set release tags
       id: tags
       run: |
-        version="${{ github.event.workflow_run.head_branch }}"
-        version="${version#release/}"
-        short_sha="${{ github.event.workflow_run.head_sha }}"
+        version="${GITHUB_REF_NAME}"
+        short_sha="${GITHUB_SHA}"
         short_sha="${short_sha::7}"
         echo "version_tag=$version" >> "$GITHUB_OUTPUT"
         echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
