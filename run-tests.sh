@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 set -e
 
-if [ ! -x ./venv/bin/pytest ]; then
+if ! ./venv/bin/python -c "import pytest, pytest_asyncio, pytest_cov" >/dev/null 2>&1; then
   ./venv/bin/pip install pytest pytest-asyncio pytest-cov
 fi
 
 if ! ./venv/bin/python -c "import influxdb_client" >/dev/null 2>&1; then
   ./venv/bin/pip install influxdb-client
+fi
+
+# API tests import FastAPI/Pydantic and use TestClient backed by httpx.
+if ! ./venv/bin/python -c "import fastapi, pydantic, httpx" >/dev/null 2>&1; then
+  ./venv/bin/pip install fastapi pydantic httpx
 fi
 
 PYTHONPATH=. ./venv/bin/pytest \
