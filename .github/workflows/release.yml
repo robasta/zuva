@@ -1,28 +1,35 @@
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
     branches:
       - 'release/*'
-  workflow_dispatch:
+    types:
+      - completed
 
 jobs:
   publish:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     env:
       DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_USERNAME }}
     steps:
     - uses: actions/checkout@v4
       with:
+        ref: ${{ github.event.workflow_run.head_sha }}
         fetch-depth: 0
         fetch-tags: true
 
     - name: Set release tags
       id: tags
       run: |
-        version="${GITHUB_REF_NAME#release/}"
+        version="${{ github.event.workflow_run.head_branch }}"
+        version="${version#release/}"
+        short_sha="${{ github.event.workflow_run.head_sha }}"
+        short_sha="${short_sha::7}"
         echo "version_tag=$version" >> "$GITHUB_OUTPUT"
-        echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3

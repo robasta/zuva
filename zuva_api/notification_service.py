@@ -1,9 +1,16 @@
 import logging
 import os
 from datetime import datetime
-from telegram import Bot
-from telegram.error import TelegramError
 from influxdb_client import Point
+
+try:
+    from telegram import Bot
+    from telegram.error import TelegramError
+except ImportError:  # pragma: no cover - exercised via tests in environments without telegram
+    Bot = None
+
+    class TelegramError(Exception):
+        pass
 from .models import NotificationChannel, AlertSeverity, AlertCategory, NotificationSettings, Alert, UserSettings
 from .db import get_influx_client, get_write_api, get_query_api, INFLUXDB_BUCKET
 
@@ -24,7 +31,7 @@ class NotificationService:
         self.influx_client = get_influx_client()
         self.write_api = get_write_api(self.influx_client)
         self.query_api = get_query_api(self.influx_client)
-        if TELEGRAM_BOT_TOKEN:
+        if TELEGRAM_BOT_TOKEN and Bot is not None:
             self.telegram_bot = Bot(token=TELEGRAM_BOT_TOKEN)
             logger.info("Telegram bot initialized")
         else:

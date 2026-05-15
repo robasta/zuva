@@ -1,12 +1,33 @@
-
-import sys
 import os
+import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
+
 import pytest
 
-# Ensure project root is in sys.path for zuva imports
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from zuva.collector import orchestrator as monitor_module
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import zuva.collector.orchestrator as orchestrator_module
+from sunsynk.client import LoginRateLimitedException, InvalidCredentialsException, SunsynkConnectionError
+
+
+class FakeInfluxClient:
+    def __init__(self, *args, **kwargs):
+        self.closed = False
+
+    def write_api(self, write_options=None):
+        return object()
+
+    def query_api(self):
+        return object()
+
+    def close(self):
+        self.closed = True
+
+
+def make_orchestrator(monkeypatch):
+    monkeypatch.setattr(orchestrator_module, "InfluxDBClient", FakeInfluxClient)
+    return orchestrator_module.AlertOrchestrator()
 
 
 @pytest.mark.asyncio
@@ -22,32 +43,32 @@ async def test_connect_client_with_retry_succeeds_on_second_attempt(monkeypatch)
 
         async def login(self):
             if len(instances) == 1:
-                raise monitor_module.LoginRateLimitedException("rate limited")
+                raise LoginRateLimitedException("rate limited")
 
         async def close(self):
             self.closed = True
 
     sleep_mock = AsyncMock()
-    monkeypatch.setattr(monitor_module, "SunsynkClient", FakeClient)
-    monkeypatch.setattr(monitor_module, "SUNSYNK_USERNAME", "user")
-    monkeypatch.setattr(monitor_module, "SUNSYNK_PASSWORD", "pass")
-    monkeypatch.setattr(monitor_module, "LOGIN_RETRY_WAIT_SECONDS", 900)
-    monkeypatch.setattr(monitor_module.asyncio, "sleep", sleep_mock)
+    monkeypatch.setattr(orchestrator_module, "SunsynkClient", FakeClient)
+    monkeypatch.setattr(orchestrator_module, "SUNSYNK_USERNAME", "user")
+    monkeypatch.setattr(orchestrator_module, "SUNSYNK_PASSWORD", "pass")
+    monkeypatch.setattr(orchestrator_module, "LOGIN_RETRY_WAIT_SECONDS", 900)
+    monkeypatch.setattr(orchestrator_module.asyncio, "sleep", sleep_mock)
 
-    monitor = monitor_module.AlertMonitor()
-    monitor.send_alert = AsyncMock()
+    orchestrator = make_orchestrator(monkeypatch)
+    orchestrator.notification.send = AsyncMock()
 
-    client = await monitor.connect_client_with_retry()
+    client = await orchestrator.connect_client_with_retry()
 
     assert client is instances[1]
     assert instances[0].closed is True
     assert instances[1].closed is False
     sleep_mock.assert_awaited_once_with(900)
-    monitor.send_alert.assert_not_awaited()
+    orchestrator.notification.send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_connect_client_with_retry_sends_critical_alert_after_second_failure(monkeypatch):
+async def test_connect_client_with_retry_sends_alert_after_second_login_failure(monkeypatch):
     instances = []
 
     class FakeClient:
@@ -58,29 +79,29 @@ async def test_connect_client_with_retry_sends_critical_alert_after_second_failu
             instances.append(self)
 
         async def login(self):
-            raise monitor_module.InvalidCredentialsException()
+            raise InvalidCredentialsException()
 
         async def close(self):
             self.closed = True
 
     sleep_mock = AsyncMock()
-    monkeypatch.setattr(monitor_module, "SunsynkClient", FakeClient)
-    monkeypatch.setattr(monitor_module, "SUNSYNK_USERNAME", "user")
-    monkeypatch.setattr(monitor_module, "SUNSYNK_PASSWORD", "pass")
-    monkeypatch.setattr(monitor_module, "LOGIN_RETRY_WAIT_SECONDS", 900)
-    monkeypatch.setattr(monitor_module.asyncio, "sleep", sleep_mock)
+    monkeypatch.setattr(orchestrator_module, "SunsynkClient", FakeClient)
+    monkeypatch.setattr(orchestrator_module, "SUNSYNK_USERNAME", "user")
+    monkeypatch.setattr(orchestrator_module, "SUNSYNK_PASSWORD", "pass")
+    monkeypatch.setattr(orchestrator_module, "LOGIN_RETRY_WAIT_SECONDS", 900)
+    monkeypatch.setattr(orchestrator_module.asyncio, "sleep", sleep_mock)
 
-    monitor = monitor_module.AlertMonitor()
-    monitor.send_alert = AsyncMock()
+    orchestrator = make_orchestrator(monkeypatch)
+    orchestrator.notification.send = AsyncMock()
 
-    client = await monitor.connect_client_with_retry()
+    client = await orchestrator.connect_client_with_retry()
 
     assert client is None
     assert all(client_instance.closed for client_instance in instances)
     sleep_mock.assert_awaited_once_with(900)
-    monitor.send_alert.assert_awaited_once()
+    orchestrator.notification.send.assert_awaited_once()
 
-    _, kwargs = monitor.send_alert.await_args
+    _, kwargs = orchestrator.notification.send.await_args
     assert kwargs["category"] == "sunsynk_login_failure"
     assert kwargs["severity"] == "critical"
     assert kwargs["metadata"]["attempts"] == 2
@@ -88,7 +109,7 @@ async def test_connect_client_with_retry_sends_critical_alert_after_second_failu
 
 
 @pytest.mark.asyncio
-async def test_connect_client_with_retry_connectivity_failure_uses_connectivity_alert_title(monkeypatch):
+async def test_connect_client_with_retry_connectivity_failure_uses_connectivity_title(monkeypatch):
     instances = []
 
     class FakeClient:
@@ -99,155 +120,86 @@ async def test_connect_client_with_retry_connectivity_failure_uses_connectivity_
             instances.append(self)
 
         async def login(self):
-            raise monitor_module.SunsynkConnectionError("internet down")
+            raise SunsynkConnectionError("internet down")
 
         async def close(self):
             self.closed = True
 
     sleep_mock = AsyncMock()
-    monkeypatch.setattr(monitor_module, "SunsynkClient", FakeClient)
-    monkeypatch.setattr(monitor_module, "SUNSYNK_USERNAME", "user")
-    monkeypatch.setattr(monitor_module, "SUNSYNK_PASSWORD", "pass")
-    monkeypatch.setattr(monitor_module, "LOGIN_RETRY_WAIT_SECONDS", 900)
-    monkeypatch.setattr(monitor_module.asyncio, "sleep", sleep_mock)
+    monkeypatch.setattr(orchestrator_module, "SunsynkClient", FakeClient)
+    monkeypatch.setattr(orchestrator_module, "SUNSYNK_USERNAME", "user")
+    monkeypatch.setattr(orchestrator_module, "SUNSYNK_PASSWORD", "pass")
+    monkeypatch.setattr(orchestrator_module, "LOGIN_RETRY_WAIT_SECONDS", 900)
+    monkeypatch.setattr(orchestrator_module.asyncio, "sleep", sleep_mock)
 
-    monitor = monitor_module.AlertMonitor()
-    monitor.send_alert = AsyncMock()
+    orchestrator = make_orchestrator(monkeypatch)
+    orchestrator.notification.send = AsyncMock()
 
-    client = await monitor.connect_client_with_retry()
+    client = await orchestrator.connect_client_with_retry()
 
     assert client is None
     assert all(client_instance.closed for client_instance in instances)
     sleep_mock.assert_awaited_once_with(900)
-    monitor.send_alert.assert_awaited_once()
+    orchestrator.notification.send.assert_awaited_once()
 
-    _, kwargs = monitor.send_alert.await_args
+    _, kwargs = orchestrator.notification.send.await_args
     assert kwargs["title"] == "🚨 Sunsynk Connectivity Failed Twice"
 
 
 @pytest.mark.asyncio
-async def test_grid_alert_no_alert_on_single_outage_reading():
-    monitor = monitor_module.AlertMonitor()
-    monitor.send_alert = AsyncMock()
-    monitor.last_grid_status = True
+async def test_monitor_loop_returns_when_credentials_missing(monkeypatch):
+    monkeypatch.setattr(orchestrator_module, "SUNSYNK_USERNAME", None)
+    monkeypatch.setattr(orchestrator_module, "SUNSYNK_PASSWORD", None)
 
-    await monitor.check_grid_alerts(0.0, 0.0, 0)
+    orchestrator = make_orchestrator(monkeypatch)
 
-    monitor.send_alert.assert_not_awaited()
+    await orchestrator.monitor_loop()
 
 
-@pytest.mark.asyncio
-async def test_grid_alert_fires_after_consecutive_outage_readings(monkeypatch):
-    monkeypatch.setattr(monitor_module, "GRID_OUTAGE_CONSECUTIVE_READINGS", 3)
+def test_shutdown_closes_influx_client(monkeypatch):
+    orchestrator = make_orchestrator(monkeypatch)
 
-    monitor = monitor_module.AlertMonitor()
-    monitor.send_alert = AsyncMock()
-    monitor.last_grid_status = True
+    orchestrator.shutdown()
 
-    for _ in range(3):
-        await monitor.check_grid_alerts(0.0, 0.0, 0)
-
-    monitor.send_alert.assert_awaited_once()
-    _, kwargs = monitor.send_alert.await_args
-    assert kwargs["category"] == "grid_outage"
+    assert orchestrator.influx_client.closed is True
 
 
 @pytest.mark.asyncio
-async def test_grid_alert_counter_resets_on_intermittent_recovery(monkeypatch):
-    monkeypatch.setattr(monitor_module, "GRID_OUTAGE_CONSECUTIVE_READINGS", 3)
+async def test_monitor_loop_writes_telemetry_and_alerts_once(monkeypatch):
+    monkeypatch.setattr(orchestrator_module, "SUNSYNK_USERNAME", "user")
+    monkeypatch.setattr(orchestrator_module, "SUNSYNK_PASSWORD", "pass")
+    monkeypatch.setattr(orchestrator_module, "POLL_INTERVAL", 1)
 
-    monitor = monitor_module.AlertMonitor()
-    monitor.send_alert = AsyncMock()
-    monitor.last_grid_status = True
+    orchestrator = make_orchestrator(monkeypatch)
 
-    await monitor.check_grid_alerts(0.0, 0.0, 0)
-    await monitor.check_grid_alerts(0.0, 0.0, 0)
-    await monitor.check_grid_alerts(5.0, 230.0, 1)
-    await monitor.check_grid_alerts(0.0, 0.0, 0)
+    fake_client = AsyncMock()
+    fake_client.get_plants.return_value = [SimpleNamespace(id=10)]
+    fake_client.get_inverters.return_value = [SimpleNamespace(sn="SN-1")]
+    fake_client.get_inverter_realtime_battery.return_value = SimpleNamespace(soc=45, power=1.2, get_voltage=lambda: 52.0)
+    fake_client.get_inverter_realtime_grid.return_value = SimpleNamespace(get_power=lambda: 0.0, get_voltage=lambda: 40.0, status=0)
+    fake_client.get_inverter_realtime_output.return_value = SimpleNamespace(pac=3.1)
+    fake_client.get_inverter_realtime_input.return_value = SimpleNamespace(get_power=lambda: 2.7)
 
-    monitor.send_alert.assert_not_awaited()
-    assert monitor.grid_outage_consecutive_count == 1
+    orchestrator.connect_client_with_retry = AsyncMock(return_value=fake_client)
+    orchestrator.telemetry.write = AsyncMock()
+    orchestrator.alerter.check_battery_alerts = AsyncMock()
+    orchestrator.alerter.check_grid_alerts = AsyncMock()
+    orchestrator.alerter.check_consumption_alerts = AsyncMock()
 
+    sleep_calls = {"n": 0}
 
-@pytest.mark.asyncio
-async def test_grid_alert_no_false_positive_when_power_low_but_voltage_normal():
-    monitor = monitor_module.AlertMonitor()
-    monitor.send_alert = AsyncMock()
-    monitor.last_grid_status = True
+    async def stop_after_first_cycle(_):
+        sleep_calls["n"] += 1
+        raise asyncio.CancelledError()
 
-    for _ in range(5):
-        await monitor.check_grid_alerts(0.05, 230.0, 1)
+    import asyncio
+    monkeypatch.setattr(orchestrator_module.asyncio, "sleep", stop_after_first_cycle)
 
-    monitor.send_alert.assert_not_awaited()
+    with pytest.raises(asyncio.CancelledError):
+        await orchestrator.monitor_loop()
 
-
-@pytest.mark.asyncio
-async def test_grid_alert_ambiguous_when_voltage_is_none():
-    monitor = monitor_module.AlertMonitor()
-    monitor.send_alert = AsyncMock()
-    monitor.last_grid_status = True
-    monitor.grid_outage_consecutive_count = 2
-    monitor.grid_restore_consecutive_count = 1
-
-    await monitor.check_grid_alerts(0.0, None, 0)
-    await monitor.check_grid_alerts(0.0, None, 0)
-    await monitor.check_grid_alerts(0.0, None, 0)
-
-    monitor.send_alert.assert_not_awaited()
-    assert monitor.grid_outage_consecutive_count == 2
-    assert monitor.grid_restore_consecutive_count == 1
-    assert monitor.last_grid_status is True
-
-
-@pytest.mark.asyncio
-async def test_grid_alert_cooldown_prevents_repeat_alerts(monkeypatch):
-    monkeypatch.setattr(monitor_module, "GRID_OUTAGE_CONSECUTIVE_READINGS", 1)
-
-    monitor = monitor_module.AlertMonitor()
-    monitor.send_alert = AsyncMock()
-    monitor.last_grid_status = True
-
-    await monitor.check_grid_alerts(0.0, 0.0, 0)
-    assert monitor.send_alert.await_count == 1
-
-    monitor.last_grid_status = True
-    monitor.grid_outage_consecutive_count = 0
-    monitor.grid_restore_consecutive_count = 0
-
-    await monitor.check_grid_alerts(0.0, 0.0, 0)
-
-    assert monitor.send_alert.await_count == 1
-
-
-@pytest.mark.asyncio
-async def test_grid_restore_alert_fires_after_consecutive_active_readings(monkeypatch):
-    monkeypatch.setattr(monitor_module, "GRID_OUTAGE_CONSECUTIVE_READINGS", 3)
-
-    monitor = monitor_module.AlertMonitor()
-    monitor.send_alert = AsyncMock()
-    monitor.last_grid_status = False
-
-    for _ in range(3):
-        await monitor.check_grid_alerts(5.0, 230.0, 1)
-
-    monitor.send_alert.assert_awaited_once()
-    _, kwargs = monitor.send_alert.await_args
-    assert kwargs["category"] == "grid_restored"
-
-
-@pytest.mark.asyncio
-async def test_grid_alert_metadata_includes_voltage_and_status(monkeypatch):
-    monkeypatch.setattr(monitor_module, "GRID_OUTAGE_CONSECUTIVE_READINGS", 1)
-
-    monitor = monitor_module.AlertMonitor()
-    monitor.send_alert = AsyncMock()
-    monitor.last_grid_status = True
-
-    await monitor.check_grid_alerts(0.0, 0.0, 0)
-
-    monitor.send_alert.assert_awaited_once()
-    _, kwargs = monitor.send_alert.await_args
-    metadata = kwargs["metadata"]
-    assert "grid_voltage" in metadata
-    assert "grid_status" in metadata
-    assert "consecutive_readings" in metadata
+    orchestrator.telemetry.write.assert_awaited_once()
+    orchestrator.alerter.check_battery_alerts.assert_awaited_once()
+    orchestrator.alerter.check_grid_alerts.assert_awaited_once()
+    orchestrator.alerter.check_consumption_alerts.assert_awaited_once()
+    fake_client.close.assert_awaited_once()
