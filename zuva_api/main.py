@@ -1,194 +1,83 @@
+
 """
-Sunsynk Notification Service
-Simplified service for sending Telegram notifications
-based on solar inverter alerts.
+Sunsynk Notification Service API
+Refactored: All logic in notification_service, models, db modules
 """
 import logging
-import os
-from datetime import datetime
-from enum import Enum
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict, field
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from dataclasses import asdict
 import uvicorn
-from influxdb_client import InfluxDBClient, Point
-from influxdb_client.client.write_api import SYNCHRONOUS
+from .models import NotificationSettings, Alert, NotificationChannel, AlertSeverity, AlertCategory
+from .notification_service import NotificationService
 
-# Telegram Bot
-from telegram import Bot
-from telegram.error import TelegramError
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+notification_service = NotificationService()
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+@app.on_event("startup")
+async def startup():
+    await notification_service.initialize()
 
-# Configuration from environment
-INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://influxdb:8086")
-INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "sunsynk-token")
-INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "sunsynk")
-INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "solar_data")
+@app.on_event("shutdown")
+async def shutdown():
+    await notification_service.shutdown()
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "robasta")
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy",
+        "telegram_enabled": notification_service.telegram_bot is not None,
+        "users_configured": len(notification_service.user_settings)
+    }
 
+@app.post("/settings")
+async def update_settings(settings: NotificationSettings):
+    await notification_service.save_user_settings(settings)
+    return {"status": "success", "user_id": settings.user_id}
 
-class NotificationChannel(str, Enum):
-    """Notification delivery channels"""
-    TELEGRAM = "telegram"
+@app.get("/settings/{user_id}")
+async def get_settings(user_id: str):
+    settings = notification_service.user_settings.get(user_id)
+    if not settings:
+        raise HTTPException(status_code=404, detail="User settings not found")
+    return asdict(settings)
 
+@app.post("/alert")
+async def send_alert(alert: Alert, user_id: str = "default"):
+    await notification_service.send_alert(alert, user_id)
+    return {"status": "sent"}
 
-class AlertSeverity(str, Enum):
-    """Alert severity levels"""
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
-
-
-class AlertCategory(str, Enum):
-    """Alert categories"""
-    BATTERY_LOW = "battery_low"
-    BATTERY_CRITICAL = "battery_critical"
-    GRID_OUTAGE = "grid_outage"
-    GRID_RESTORED = "grid_restored"
-    HIGH_CONSUMPTION = "high_consumption"
-    SYSTEM_ERROR = "system_error"
-
-
-# Pydantic Models for API
-class NotificationSettings(BaseModel):
-    """User notification preferences"""
-    user_id: str
-    enabled_channels: List[NotificationChannel]
-    telegram_chat_id: Optional[str] = None
-    quiet_hours_start: str = "22:00"
-    quiet_hours_end: str = "07:00"
-    min_severity: AlertSeverity = AlertSeverity.MEDIUM
-    rate_limit_minutes: int = 15
-
-
-class Alert(BaseModel):
-    """Alert to be sent"""
-    category: AlertCategory
-    severity: AlertSeverity
-    title: str
-    message: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-
-# Data storage
-@dataclass
-class UserSettings:
-    """Internal user settings storage"""
-    user_id: str
-    enabled_channels: List[str]
-    telegram_chat_id: Optional[str] = None
-    quiet_hours_start: str = "22:00"
-    quiet_hours_end: str = "07:00"
-    min_severity: str = "medium"
-    rate_limit_minutes: int = 15
-    last_alert_times: Dict[str, datetime] = field(default_factory=dict)
-
-
-class NotificationService:
-    """Handles notification delivery via Telegram"""
-    
-    def __init__(self):
-        self.influx_client = None
-        self.write_api = None
-        self.query_api = None
-        self.telegram_bot: Optional[Bot] = None
-        self.user_settings: Dict[str, UserSettings] = {}
-        
-    async def initialize(self):
-        """Initialize connections and load settings"""
-        # InfluxDB
-        self.influx_client = InfluxDBClient(
-            url=INFLUXDB_URL,
-            token=INFLUXDB_TOKEN,
-            org=INFLUXDB_ORG
-        )
-        self.write_api = self.influx_client.write_api(write_options=SYNCHRONOUS)
-        self.query_api = self.influx_client.query_api()
-        
-        # Telegram Bot
-        if TELEGRAM_BOT_TOKEN:
-            self.telegram_bot = Bot(token=TELEGRAM_BOT_TOKEN)
-            logger.info("Telegram bot initialized")
-        else:
-            logger.warning("TELEGRAM_BOT_TOKEN not set - Telegram notifications disabled")
-        
-        # Load user settings from InfluxDB
-        await self._load_user_settings()
-    
-    async def _load_user_settings(self):
-        """Load user settings from InfluxDB"""
-        try:
-            query = f'''
-                from(bucket: "{INFLUXDB_BUCKET}")
-                    |> range(start: -1d)
-                    |> filter(fn: (r) => r._measurement == "user_settings")
-                    |> last()
-            '''
-            result = self.query_api.query(query=query)
-            
-            for table in result:
-                for record in table.records:
-                    user_id = record.values.get("user_id")
-                    if user_id:
-                        # Reconstruct settings from fields
-                        settings = UserSettings(
-                            user_id=user_id,
-                            enabled_channels=record.values.get("enabled_channels", "").split(","),
-                            telegram_chat_id=record.values.get("telegram_chat_id"),
-                            quiet_hours_start=record.values.get("quiet_hours_start", "22:00"),
-                            quiet_hours_end=record.values.get("quiet_hours_end", "07:00"),
-                            min_severity=record.values.get("min_severity", "medium"),
-                            rate_limit_minutes=int(record.values.get("rate_limit_minutes", 15))
-                        )
-                        self.user_settings[user_id] = settings
-            
-            logger.info(f"Loaded settings for {len(self.user_settings)} users")
-            
-            # Auto-create default user settings from environment variables if not exists
-            if DEFAULT_USER_ID not in self.user_settings:
-                enabled_channels = []
-                if TELEGRAM_CHAT_ID and TELEGRAM_BOT_TOKEN:
-                    enabled_channels.append("telegram")
-                
-                if enabled_channels:
-                    default_settings = UserSettings(
-                        user_id=DEFAULT_USER_ID,
-                        enabled_channels=enabled_channels,
-                        telegram_chat_id=TELEGRAM_CHAT_ID,
-                        quiet_hours_start="22:00",
-                        quiet_hours_end="07:00",
-                        min_severity="medium",
-                        rate_limit_minutes=15
-                    )
-                    self.user_settings[DEFAULT_USER_ID] = default_settings
-                    logger.info("Auto-configured default user from environment variables")
-        except Exception as e:
-            logger.error(f"Error loading user settings: {e}")
-    
-    async def save_user_settings(self, settings: NotificationSettings):
-        """Save user settings to InfluxDB and memory"""
-        user_settings = UserSettings(
-            user_id=settings.user_id,
-            enabled_channels=[ch.value for ch in settings.enabled_channels],
-            telegram_chat_id=settings.telegram_chat_id,
-            quiet_hours_start=settings.quiet_hours_start,
-            quiet_hours_end=settings.quiet_hours_end,
-            min_severity=settings.min_severity.value,
-            rate_limit_minutes=settings.rate_limit_minutes
-        )
-        
-        # Save to memory
-        self.user_settings[settings.user_id] = user_settings
+@app.get("/alerts/history/{user_id}")
+async def get_alert_history(user_id: str, hours: int = 24):
+    query = f'''
+        from(bucket: "{notification_service.influx_client.bucket}")
+            |> range(start: -{hours}h)
+            |> filter(fn: (r) => r._measurement == "alerts")
+            |> filter(fn: (r) => r.user_id == "{user_id}")
+    '''
+    try:
+        result = notification_service.query_api.query(query=query)
+        alerts = []
+        for table in result:
+            for record in table.records:
+                alerts.append({
+                    "time": record.get_time(),
+                    "category": record.values.get("category"),
+                    "severity": record.values.get("severity"),
+                    "title": record.values.get("title"),
+                    "message": record.values.get("message")
+                })
+        return alerts
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
         
         # Save to InfluxDB
         point = Point("user_settings") \
@@ -332,7 +221,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 notification_service = NotificationService()
+
 
 
 @app.on_event("startup")
@@ -340,14 +231,15 @@ async def startup():
     await notification_service.initialize()
 
 
+
 @app.on_event("shutdown")
 async def shutdown():
     await notification_service.shutdown()
 
 
+
 @app.get("/health")
 async def health():
-    """Health check endpoint"""
     return {
         "status": "healthy",
         "telegram_enabled": notification_service.telegram_bot is not None,
@@ -355,40 +247,38 @@ async def health():
     }
 
 
+
 @app.post("/settings")
 async def update_settings(settings: NotificationSettings):
-    """Update notification settings for a user"""
     await notification_service.save_user_settings(settings)
     return {"status": "success", "user_id": settings.user_id}
 
 
+
 @app.get("/settings/{user_id}")
 async def get_settings(user_id: str):
-    """Get notification settings for a user"""
     settings = notification_service.user_settings.get(user_id)
     if not settings:
         raise HTTPException(status_code=404, detail="User settings not found")
-    
     return asdict(settings)
+
 
 
 @app.post("/alert")
 async def send_alert(alert: Alert, user_id: str = "default"):
-    """Send an alert to a user"""
     await notification_service.send_alert(alert, user_id)
     return {"status": "sent"}
 
 
+
 @app.get("/alerts/history/{user_id}")
 async def get_alert_history(user_id: str, hours: int = 24):
-    """Get alert history for a user"""
     query = f'''
-        from(bucket: "{INFLUXDB_BUCKET}")
+        from(bucket: "{notification_service.influx_client.bucket}")
             |> range(start: -{hours}h)
             |> filter(fn: (r) => r._measurement == "alerts")
             |> filter(fn: (r) => r.user_id == "{user_id}")
     '''
-    
     try:
         result = notification_service.query_api.query(query=query)
         alerts = []
