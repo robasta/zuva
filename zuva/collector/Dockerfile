@@ -31,4 +31,4 @@ ENV PYTHONPATH="/app:/app/collector"
 RUN mkdir -p /app/logs
 
 # Run the alert monitor
-CMD ["python", "-m", "collector.alert_monitor"]
+CMD ["python", "-m", "collector.orchestrator"]
