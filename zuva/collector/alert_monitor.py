@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, time, timedelta
 import aiohttp
 
-from influxdb_client import InfluxDBClient
+from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 # Add parent directory to path to import sunsynk client
@@ -216,6 +216,45 @@ class AlertMonitor:
                 metadata={"load_power": load_power, "limit_kw": HIGH_CONSUMPTION_THRESHOLD}
             )
 
+    async def write_telemetry(
+        self,
+        inverter_sn: str,
+        plant_id: int,
+        load_power_kw: float,
+        grid_power_kw: float,
+        battery_soc: float,
+        grid_voltage: float | None = None,
+        grid_status: int | None = None,
+        battery_power_kw: float | None = None,
+        battery_voltage: float | None = None,
+        input_power_kw: float | None = None,
+    ):
+        """Write telemetry data to InfluxDB for historical analysis"""
+        try:
+            point = Point("usage_readings") \
+                .tag("inverter_sn", inverter_sn) \
+                .tag("plant_id", str(plant_id)) \
+                .field("load_power_kw", load_power_kw) \
+                .field("grid_power_kw", grid_power_kw) \
+                .field("battery_soc", battery_soc)
+
+            # Add optional fields if present
+            if grid_voltage is not None:
+                point = point.field("grid_voltage", grid_voltage)
+            if grid_status is not None:
+                point = point.field("grid_status", grid_status)
+            if battery_power_kw is not None:
+                point = point.field("battery_power_kw", battery_power_kw)
+            if battery_voltage is not None:
+                point = point.field("battery_voltage", battery_voltage)
+            if input_power_kw is not None:
+                point = point.field("input_power_kw", input_power_kw)
+
+            self.write_api.write(bucket=INFLUXDB_BUCKET, record=point)
+            logger.debug(f"Telemetry written for inverter {inverter_sn}")
+        except Exception as e:
+            logger.error(f"Error writing telemetry: {e}")
+
     async def connect_client_with_retry(self):
         last_error = None
 
@@ -313,10 +352,12 @@ class AlertMonitor:
                             continue
 
                         inverter = inverters[0]
+                        plant_id = plants[0].id  # Extract plant_id for telemetry tagging
 
                         battery = await client.get_inverter_realtime_battery(inverter.sn)
                         grid = await client.get_inverter_realtime_grid(inverter.sn)
                         output = await client.get_inverter_realtime_output(inverter.sn)
+                        input_data = await client.get_inverter_realtime_input(inverter.sn)
 
                         battery_soc = float(getattr(battery, 'soc', 0) or 0)
                         grid_power = grid.get_power() if hasattr(grid, 'get_power') else float(getattr(grid, 'pac', 0) or 0)
@@ -325,8 +366,27 @@ class AlertMonitor:
                         grid_voltage = float(grid_voltage) if grid_voltage is not None else None
                         grid_status = getattr(grid, 'status', None)
                         load_power = float(getattr(output, 'pac', 0) or 0)
+                        # Extract additional telemetry fields
+                        battery_power_kw = float(getattr(battery, 'power', 0) or 0) if hasattr(battery, 'power') else None
+                        battery_voltage = battery.get_voltage() if hasattr(battery, 'get_voltage') else None
+                        battery_voltage = float(battery_voltage) if battery_voltage is not None else None
+                        input_power_kw = input_data.get_power() if hasattr(input_data, 'get_power') else 0.0
 
-                        logger.info(f"Battery: {battery_soc}%, Grid: {grid_power}kW, Load: {load_power}kW")
+                        logger.info(f"Battery: {battery_soc}%, Grid: {grid_power}kW, Load: {load_power}kW, Solar: {input_power_kw}kW")
+
+                        # Write telemetry before alert checks
+                        await self.write_telemetry(
+                            inverter_sn=inverter.sn,
+                            plant_id=plant_id,
+                            load_power_kw=load_power,
+                            grid_power_kw=grid_power,
+                            battery_soc=battery_soc,
+                            grid_voltage=grid_voltage,
+                            grid_status=grid_status,
+                            battery_power_kw=battery_power_kw,
+                            battery_voltage=battery_voltage,
+                            input_power_kw=input_power_kw,
+                        )
 
                         await self.check_battery_alerts(battery_soc)
                         await self.check_grid_alerts(grid_power, grid_voltage, grid_status)
