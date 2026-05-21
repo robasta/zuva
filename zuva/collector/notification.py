@@ -1,5 +1,6 @@
 import aiohttp
 import logging
+import os
 from urllib.parse import urlparse, urlunparse
 
 class NotificationSender:
@@ -12,9 +13,10 @@ class NotificationSender:
     def _build_candidate_urls(api_url):
         candidates = [api_url.rstrip("/")]
         parsed = urlparse(api_url)
+        running_in_container = os.path.exists("/.dockerenv")
 
-        # When running outside Docker, the service hostname will not resolve.
-        if parsed.hostname == "zuva-api":
+        # Only use localhost fallback when running outside Docker.
+        if parsed.hostname == "zuva-api" and not running_in_container:
             localhost_netloc = "localhost"
             if parsed.port is not None:
                 localhost_netloc = f"localhost:{parsed.port}"

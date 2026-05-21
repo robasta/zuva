@@ -25,6 +25,7 @@ services:
     platform: linux/amd64
     container_name: zuva-api
     restart: unless-stopped
+    command: ["uvicorn", "zuva_api.main:app", "--host", "0.0.0.0", "--port", "8001"]
     ports:
       - "8001:8001"
     environment:
@@ -37,7 +38,14 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - DEFAULT_USER_ID=${DEFAULT_USER_ID}
     depends_on:
-      - influxdb
+      influxdb:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - sunsynk-network
 
@@ -61,8 +69,10 @@ services:
       - BATTERY_CRITICAL_THRESHOLD=${BATTERY_CRITICAL_THRESHOLD:-15}
       - HIGH_CONSUMPTION_THRESHOLD=${HIGH_CONSUMPTION_THRESHOLD:-400}
     depends_on:
-      - influxdb
-      - zuva-api
+      influxdb:
+        condition: service_started
+      zuva-api:
+        condition: service_healthy
     networks:
       - sunsynk-network
 
