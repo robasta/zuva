@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY zuva_api/ /app/zuva_api/
 
 # Run the service
-CMD ["uvicorn", "zuva_api.main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["sh", "-c", "uvicorn zuva_api.main:app --host 0.0.0.0 --port 8001 --log-level ${UVICORN_LOG_LEVEL:-warning}"]

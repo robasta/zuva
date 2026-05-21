@@ -28,7 +28,8 @@ from .telemetry import TelemetryCollector
 from .alert_logic import AlertEvaluator
 from .notification import NotificationSender
 
-logging.basicConfig(level=logging.INFO)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "WARN").upper()
+logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.WARN))
 logger = logging.getLogger(__name__)
 
 # Configuration

@@ -25,11 +25,12 @@ services:
     platform: linux/amd64
     container_name: zuva-api
     restart: unless-stopped
-    command: ["uvicorn", "zuva_api.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    command: ["sh", "-c", "uvicorn zuva_api.main:app --host 0.0.0.0 --port 8001 --log-level $${UVICORN_LOG_LEVEL:-warning}"]
     ports:
       - "8001:8001"
     environment:
       - API_PORT=8001
+      - UVICORN_LOG_LEVEL=${UVICORN_LOG_LEVEL:-warning}
       - INFLUXDB_URL=http://influxdb:8086
       - INFLUXDB_TOKEN=sunsynk-token
       - INFLUXDB_ORG=sunsynk
@@ -58,6 +59,7 @@ services:
     environment:
       - SUNSYNK_USERNAME=${SUNSYNK_USERNAME}
       - SUNSYNK_PASSWORD=${SUNSYNK_PASSWORD}
+      - LOG_LEVEL=${LOG_LEVEL:-WARN}
       - INFLUXDB_URL=http://influxdb:8086
       - INFLUXDB_TOKEN=sunsynk-token
       - INFLUXDB_ORG=sunsynk
