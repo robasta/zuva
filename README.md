@@ -71,7 +71,7 @@ Use the API to configure your notification preferences:
 
 ```bash
 # Update settings for default user
-curl -X POST http://localhost:8000/settings \
+curl -X POST http://localhost:8001/settings \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "default",

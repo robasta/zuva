@@ -43,7 +43,7 @@ INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "sunsynk-token")
 INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "sunsynk")
 INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "solar_data")
 
-NOTIFICATION_API_URL = os.getenv("NOTIFICATION_API_URL", "http://zuva-api:8000")
+NOTIFICATION_API_URL = os.getenv("NOTIFICATION_API_URL", "http://zuva-api:8001")
 DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "robasta")
 
 # Alert Thresholds config dict for injection

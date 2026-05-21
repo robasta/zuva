@@ -14,7 +14,7 @@ async def test_notification_api():
     """Test the notification API health"""
     print("🏥 Testing Notification API...")
     
-    api_url = os.getenv("NOTIFICATION_API_URL", "http://localhost:8000")
+    api_url = os.getenv("NOTIFICATION_API_URL", "http://localhost:8001")
     
     try:
         async with aiohttp.ClientSession() as session:
@@ -41,7 +41,7 @@ async def test_send_alert(user_id="default"):
     """Send a test alert"""
     print(f"\n📤 Sending test alert to user '{user_id}'...")
     
-    api_url = os.getenv("NOTIFICATION_API_URL", "http://localhost:8000")
+    api_url = os.getenv("NOTIFICATION_API_URL", "http://localhost:8001")
     
     test_alert = {
         "category": "system_error",
@@ -79,7 +79,7 @@ async def check_settings(user_id="default"):
     """Check user settings"""
     print(f"\n⚙️  Checking settings for user '{user_id}'...")
     
-    api_url = os.getenv("NOTIFICATION_API_URL", "http://localhost:8000")
+    api_url = os.getenv("NOTIFICATION_API_URL", "http://localhost:8001")
     
     try:
         async with aiohttp.ClientSession() as session:
