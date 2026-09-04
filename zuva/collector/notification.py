@@ -1,13 +1,31 @@
-import aiohttp
 import logging
 import os
 from urllib.parse import urlparse, urlunparse
 
+import aiohttp
+
+
 class NotificationSender:
-    def __init__(self, api_url, user_id):
+    """Posts alerts to the notification API.
+
+    Holds one aiohttp session for the process lifetime rather than building a
+    connection pool per alert.
+    """
+
+    def __init__(self, api_url, user_id, api_key=None, timeout_seconds=None):
         self.api_urls = self._build_candidate_urls(api_url)
         self.user_id = user_id
+        self.api_key = api_key if api_key is not None else os.getenv("ZUVA_API_KEY")
+        self.timeout_seconds = float(
+            timeout_seconds if timeout_seconds is not None
+            else os.getenv("NOTIFICATION_TIMEOUT_SECONDS", "15")
+        )
         self.logger = logging.getLogger(__name__)
+        self._session = None
+        if not self.api_key:
+            self.logger.warning(
+                "ZUVA_API_KEY is not set; the notification API will reject these alerts"
+            )
 
     @staticmethod
     def _build_candidate_urls(api_url):
@@ -35,6 +53,21 @@ class NotificationSender:
 
         return candidates
 
+    def _ensure_session(self):
+        if self._session is None or getattr(self._session, "closed", False):
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout_seconds)
+            )
+        return self._session
+
+    def _headers(self):
+        return {"X-API-Key": self.api_key} if self.api_key else {}
+
+    async def aclose(self):
+        if self._session is not None and not getattr(self._session, "closed", False):
+            await self._session.close()
+        self._session = None
+
     async def send(self, category, severity, title, message, metadata=None):
         payload = {
             "category": category,
@@ -44,24 +77,33 @@ class NotificationSender:
             "metadata": metadata or {}
         }
 
+        session = self._ensure_session()
         for index, api_url in enumerate(self.api_urls):
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        f"{api_url}/alert",
-                        json=payload,
-                        params={"user_id": self.user_id}
-                    ) as response:
-                        if response.status == 200:
-                            self.logger.info(f"Alert sent: {category}")
-                            return
-                        self.logger.error(
-                            f"Failed to send alert via {api_url}: {response.status}"
-                        )
-            except Exception as error:
-                self.logger.error(f"Error sending alert via {api_url}: {error}")
+                async with session.post(
+                    f"{api_url}/alert",
+                    json=payload,
+                    params={"user_id": self.user_id},
+                    headers=self._headers(),
+                ) as response:
+                    if response.status == 200:
+                        self.logger.info("Alert sent: %s", category)
+                        return
+                    body = await self._safe_body(response)
+                    self.logger.error(
+                        "Failed to send alert via %s: %s %s", api_url, response.status, body
+                    )
+            except Exception as error:  # pylint: disable=broad-except
+                self.logger.error("Error sending alert via %s: %s", api_url, error)
 
             if index < len(self.api_urls) - 1:
                 self.logger.warning(
-                    f"Retrying alert delivery with fallback URL: {self.api_urls[index + 1]}"
+                    "Retrying alert delivery with fallback URL: %s", self.api_urls[index + 1]
                 )
+
+    @staticmethod
+    async def _safe_body(response):
+        try:
+            return (await response.text())[:200]
+        except Exception:  # pylint: disable=broad-except
+            return ""
