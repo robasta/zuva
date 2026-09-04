@@ -2,8 +2,6 @@ import logging
 import os
 from datetime import datetime, timedelta
 
-from influxdb_client import Point
-
 try:
     from telegram import Bot
     from telegram.error import TelegramError
@@ -13,7 +11,7 @@ except ImportError:  # pragma: no cover - exercised via tests in environments wi
     class TelegramError(Exception):
         pass
 
-from .db import get_influx_client, get_query_api, get_write_api, INFLUXDB_BUCKET
+from .history_store import HistoryStore
 from .models import (
     Alert,
     AlertCategory,
@@ -41,18 +39,22 @@ logger = logging.getLogger(__name__)
 
 
 class NotificationService:
-    def __init__(self, settings_store: SettingsStore | None = None):
-        self.influx_client = None
-        self.write_api = None
-        self.query_api = None
+    def __init__(
+        self,
+        settings_store: SettingsStore | None = None,
+        history_store: HistoryStore | None = None,
+    ):
         self.telegram_bot = None
         self.user_settings = {}
         self.settings_store = settings_store or SettingsStore()
+        self.history_store = history_store or HistoryStore()
 
     async def initialize(self):
-        self.influx_client = get_influx_client()
-        self.write_api = get_write_api(self.influx_client)
-        self.query_api = get_query_api(self.influx_client)
+        try:
+            self.history_store.initialize()
+        except Exception as error:  # pylint: disable=broad-except
+            # History is a record, not the job: losing it must not stop alerts.
+            logger.error("Could not initialize the history store: %s", error)
         if TELEGRAM_BOT_TOKEN and Bot is not None:
             self.telegram_bot = Bot(token=TELEGRAM_BOT_TOKEN)
             logger.info("Telegram bot initialized")
@@ -69,50 +71,7 @@ class NotificationService:
             logger.error("Error loading user settings: %s", error)
             self.user_settings = {}
 
-        if not self.user_settings:
-            # One-time migration for deployments whose settings only exist in
-            # InfluxDB (where they were previously stored).
-            self._import_legacy_settings()
-
         self._ensure_default_user()
-
-    def _import_legacy_settings(self):
-        if self.query_api is None:
-            return
-        query = f'''
-            from(bucket: "{INFLUXDB_BUCKET}")
-                |> range(start: 0)
-                |> filter(fn: (r) => r._measurement == "user_settings")
-                |> last()
-        '''
-        try:
-            result = self.query_api.query(query=query)
-        except Exception as error:  # pylint: disable=broad-except
-            logger.warning("Could not read legacy settings from InfluxDB: %s", error)
-            return
-
-        imported = 0
-        for table in result:
-            for record in table.records:
-                user_id = record.values.get("user_id")
-                if not user_id:
-                    continue
-                settings = UserSettings(
-                    user_id=user_id,
-                    enabled_channels=[
-                        c for c in (record.values.get("enabled_channels") or "").split(",") if c
-                    ],
-                    telegram_chat_id=record.values.get("telegram_chat_id"),
-                    quiet_hours_start=record.values.get("quiet_hours_start") or "22:00",
-                    quiet_hours_end=record.values.get("quiet_hours_end") or "07:00",
-                    min_severity=record.values.get("min_severity") or "medium",
-                    rate_limit_minutes=int(record.values.get("rate_limit_minutes") or 15),
-                )
-                self.user_settings[user_id] = settings
-                self._persist(settings)
-                imported += 1
-        if imported:
-            logger.info("Migrated %s user settings from InfluxDB into the settings store", imported)
 
     def _ensure_default_user(self):
         if DEFAULT_USER_ID in self.user_settings:
@@ -258,20 +217,19 @@ class NotificationService:
             self.settings_store.record_alert(user_id, alert.category.value, sent_at)
         except Exception as error:  # pylint: disable=broad-except
             logger.error("Could not persist rate-limit state: %s", error)
-        self._record_alert_history(alert, user_id)
+        self._record_alert_history(alert, user_id, sent_at)
         return {"status": "sent"}
 
-    def _record_alert_history(self, alert: Alert, user_id: str):
-        if self.write_api is None:
-            return
+    def _record_alert_history(self, alert: Alert, user_id: str, sent_at: datetime):
         try:
-            point = Point("alerts") \
-                .tag("user_id", user_id) \
-                .tag("category", alert.category.value) \
-                .tag("severity", alert.severity.value) \
-                .field("title", alert.title) \
-                .field("message", alert.message)
-            self.write_api.write(bucket=INFLUXDB_BUCKET, record=point)
+            self.history_store.record_alert(
+                user_id=user_id,
+                category=alert.category.value,
+                severity=alert.severity.value,
+                title=alert.title,
+                message=alert.message,
+                when=sent_at,
+            )
         except Exception as error:  # pylint: disable=broad-except
             logger.error("Could not write alert history: %s", error)
 
@@ -299,7 +257,3 @@ class NotificationService:
         except TelegramError as error:
             logger.error("Telegram error: %s", error)
             return False
-
-    async def shutdown(self):
-        if self.influx_client:
-            self.influx_client.close()

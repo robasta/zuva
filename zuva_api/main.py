@@ -6,13 +6,11 @@ import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
-from datetime import timedelta
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from .db import INFLUXDB_BUCKET
-from .models import Alert, NotificationSettings, USER_ID_PATTERN
+from .models import Alert, NotificationSettings, TelemetryReading, USER_ID_PATTERN
 from .notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
@@ -39,7 +37,6 @@ async def lifespan(_app: FastAPI):
         )
     await notification_service.initialize()
     yield
-    await notification_service.shutdown()
 
 
 app = FastAPI(title="Sunsynk Notification Service", lifespan=lifespan)
@@ -105,40 +102,26 @@ async def send_alert(alert: Alert, user_id: str = Query(default="default", patte
     return result
 
 
+@app.post("/telemetry", dependencies=[Depends(require_api_key)])
+async def record_telemetry(reading: TelemetryReading):
+    """Store one poll's readings. Called by the collector, which owns no database."""
+    try:
+        notification_service.history_store.record_reading(
+            **reading.model_dump(exclude_none=True)
+        )
+    except Exception as exc:
+        logger.exception("Could not store telemetry for inverter %s", reading.inverter_sn)
+        raise HTTPException(status_code=500, detail="Could not store telemetry") from exc
+    return {"status": "stored"}
+
+
 @app.get("/alerts/history/{user_id}", dependencies=[Depends(require_api_key)])
 async def get_alert_history(
     user_id: str = UserId,
     hours: int = Query(default=24, ge=1, le=8760),
 ):
-    # Parameterised so that neither user_id nor the range can inject Flux.
-    query = '''
-        from(bucket: params.bucket)
-            |> range(start: params.start)
-            |> filter(fn: (r) => r._measurement == "alerts")
-            |> filter(fn: (r) => r.user_id == params.user_id)
-    '''
-    params = {
-        "bucket": INFLUXDB_BUCKET,
-        # pylint sees the FastAPI Query default rather than the int FastAPI passes.
-        "start": timedelta(hours=-hours),  # pylint: disable=invalid-unary-operand-type
-        "user_id": user_id,
-    }
-
     try:
-        result = notification_service.query_api.query(query=query, params=params)
-        alerts = []
-        for table in result:
-            for record in table.records:
-                alerts.append(
-                    {
-                        "time": record.get_time(),
-                        "category": record.values.get("category"),
-                        "severity": record.values.get("severity"),
-                        "title": record.values.get("title"),
-                        "message": record.values.get("message"),
-                    }
-                )
-        return alerts
+        return notification_service.history_store.recent_alerts(user_id, hours)
     except Exception as exc:
         logger.exception("Alert history query failed for user %s", user_id)
         raise HTTPException(status_code=500, detail="Could not read alert history") from exc

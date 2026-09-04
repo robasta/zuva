@@ -1,10 +1,10 @@
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 import zuva_api.main as main_module
+from zuva_api.history_store import HistoryStore
 
 API_KEY = "test-api-key"
 AUTH = {"X-API-Key": API_KEY}
@@ -22,51 +22,23 @@ class DummySettings:
     last_alert_times: dict = field(default_factory=dict)
 
 
-class FakeRecord:
-    def __init__(self, values):
-        self.values = values
-
-    def get_time(self):
-        return datetime(2026, 1, 1, 12, 0, 0)
-
-
-class FakeTable:
-    def __init__(self, records):
-        self.records = records
-
-
-class FakeQueryApi:
-    def __init__(self, error=None):
-        self.error = error
-        self.calls = []
-
-    def query(self, query, params=None):
-        self.calls.append({"query": query, "params": params})
-        if self.error is not None:
-            raise self.error
-        return [
-            FakeTable([
-                FakeRecord({
-                    "category": "grid_outage",
-                    "severity": "high",
-                    "title": "Grid",
-                    "message": "Down",
-                })
-            ])
-        ]
+@pytest.fixture
+def history(tmp_path):
+    """A real SQLite history on a temp path, so the endpoints exercise real SQL."""
+    store = HistoryStore(str(tmp_path / "zuva.db"))
+    store.initialize()
+    return store
 
 
 @pytest.fixture
-def service(monkeypatch):
+def service(monkeypatch, history):
     monkeypatch.setattr(main_module, "ZUVA_API_KEY", API_KEY)
     svc = main_module.notification_service
     monkeypatch.setattr(svc, "user_settings", {})
     monkeypatch.setattr(svc, "telegram_bot", object())
+    monkeypatch.setattr(svc, "history_store", history)
 
     async def fake_init():
-        return None
-
-    async def fake_shutdown():
         return None
 
     async def fake_save(settings):
@@ -84,10 +56,8 @@ def service(monkeypatch):
         return {"status": "sent"}
 
     monkeypatch.setattr(svc, "initialize", fake_init)
-    monkeypatch.setattr(svc, "shutdown", fake_shutdown)
     monkeypatch.setattr(svc, "save_user_settings", fake_save)
     monkeypatch.setattr(svc, "send_alert", fake_send)
-    monkeypatch.setattr(svc, "query_api", FakeQueryApi())
     return svc
 
 
@@ -113,6 +83,16 @@ ALERT_PAYLOAD = {
     "metadata": {"a": 1},
 }
 
+TELEMETRY_PAYLOAD = {
+    "inverter_sn": "SN1",
+    "plant_id": "7",
+    "load_power_w": 812.0,
+    "grid_power_w": -45.0,
+    "battery_soc": 64.0,
+    "grid_voltage": 230.1,
+    "grid_status": 1,
+}
+
 
 def test_startup_refuses_to_run_without_an_api_key(monkeypatch, service):
     monkeypatch.setattr(main_module, "ZUVA_API_KEY", None)
@@ -136,6 +116,7 @@ def test_health_needs_no_api_key(client):
         ("post", "/settings", SETTINGS_PAYLOAD),
         ("get", "/settings/u1", None),
         ("post", "/alert?user_id=u1", ALERT_PAYLOAD),
+        ("post", "/telemetry", TELEMETRY_PAYLOAD),
         ("get", "/alerts/history/u1", None),
     ],
 )
@@ -225,22 +206,26 @@ def test_collector_login_failure_category_is_accepted(client):
     assert r.status_code == 200
 
 
-def test_get_alert_history_success(client, service):
+def test_get_alert_history_success(client, history):
+    history.record_alert("u1", "grid_outage", "high", "Grid", "Down")
+
     r = client.get("/alerts/history/u1?hours=2", headers=AUTH)
+
     assert r.status_code == 200
     data = r.json()
     assert len(data) == 1
     assert data[0]["category"] == "grid_outage"
+    assert data[0]["title"] == "Grid"
 
 
-def test_alert_history_query_is_parameterised(client, service):
-    client.get("/alerts/history/u1?hours=3", headers=AUTH)
+def test_alert_history_is_scoped_to_the_path_user(client, history):
+    """The user id is a bound parameter, so it can only ever match one user."""
+    history.record_alert("u1", "grid_outage", "high", "Mine", "m")
+    history.record_alert("u2", "grid_outage", "high", "Theirs", "t")
 
-    call = service.query_api.calls[-1]
-    # The user id must travel as a parameter, never interpolated into Flux.
-    assert "u1" not in call["query"]
-    assert call["params"]["user_id"] == "u1"
-    assert call["params"]["start"] == timedelta(hours=-3)
+    r = client.get("/alerts/history/u1?hours=3", headers=AUTH)
+
+    assert [row["title"] for row in r.json()] == ["Mine"]
 
 
 def test_alert_history_rejects_out_of_range_hours(client):
@@ -248,10 +233,59 @@ def test_alert_history_rejects_out_of_range_hours(client):
     assert client.get("/alerts/history/u1?hours=100000", headers=AUTH).status_code == 422
 
 
-def test_get_alert_history_error_does_not_leak_internals(client, service, monkeypatch):
-    monkeypatch.setattr(service, "query_api", FakeQueryApi(error=RuntimeError("boom")))
+def test_get_alert_history_error_does_not_leak_internals(client, history, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(history, "recent_alerts", boom)
 
     r = client.get("/alerts/history/u1", headers=AUTH)
 
     assert r.status_code == 500
     assert r.json()["detail"] == "Could not read alert history"
+
+
+def test_telemetry_is_stored(client, history):
+    r = client.post("/telemetry", json=TELEMETRY_PAYLOAD, headers=AUTH)
+
+    assert r.status_code == 200
+    assert r.json() == {"status": "stored"}
+
+    with history._connect() as conn:
+        row = conn.execute("SELECT * FROM readings").fetchone()
+    assert row["inverter_sn"] == "SN1"
+    assert row["load_power_w"] == 812.0
+    assert row["grid_status"] == 1
+
+
+def test_telemetry_accepts_a_reading_without_the_optional_fields(client, history):
+    payload = {
+        "inverter_sn": "SN2",
+        "load_power_w": 1.0,
+        "grid_power_w": 2.0,
+        "battery_soc": 3.0,
+    }
+
+    r = client.post("/telemetry", json=payload, headers=AUTH)
+
+    assert r.status_code == 200
+    with history._connect() as conn:
+        row = conn.execute("SELECT * FROM readings").fetchone()
+    assert row["grid_voltage"] is None
+
+
+def test_telemetry_rejects_a_malformed_reading(client):
+    r = client.post("/telemetry", json={"plant_id": "7"}, headers=AUTH)
+    assert r.status_code == 422
+
+
+def test_telemetry_write_failure_does_not_leak_internals(client, history, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(history, "record_reading", boom)
+
+    r = client.post("/telemetry", json=TELEMETRY_PAYLOAD, headers=AUTH)
+
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Could not store telemetry"

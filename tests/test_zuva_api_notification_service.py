@@ -1,10 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 import zuva_api.notification_service as svc_module
+from zuva_api.history_store import HistoryStore
 from zuva_api.models import (
     Alert,
     AlertCategory,
@@ -17,20 +18,10 @@ from zuva_api.settings_store import SettingsStore
 from zuva_api.timeutil import local_now
 
 
-class FakeWriteApi:
-    def __init__(self):
-        self.calls = []
-
-    def write(self, bucket, record):
-        self.calls.append((bucket, record))
-
-
-class FakeInfluxClient:
-    def __init__(self):
-        self.closed = False
-
-    def close(self):
-        self.closed = True
+@pytest.fixture(autouse=True)
+def db_in_tmp_path(tmp_path, monkeypatch):
+    """Any default-constructed store must land in tmp_path, never in /data."""
+    monkeypatch.setenv("SETTINGS_DB_PATH", str(tmp_path / "zuva.db"))
 
 
 @pytest.fixture
@@ -42,10 +33,15 @@ def store(tmp_path):
 
 
 @pytest.fixture
-def service(store):
-    service = svc_module.NotificationService(settings_store=store)
-    service.write_api = FakeWriteApi()
-    return service
+def history(tmp_path):
+    history = HistoryStore(str(tmp_path / "zuva.db"))
+    history.initialize()
+    return history
+
+
+@pytest.fixture
+def service(store, history):
+    return svc_module.NotificationService(settings_store=store, history_store=history)
 
 
 def make_settings(**overrides):
@@ -71,32 +67,34 @@ def make_alert(**overrides):
 
 
 @pytest.mark.asyncio
-async def test_initialize_sets_clients_and_bot(monkeypatch, store):
-    fake_client = FakeInfluxClient()
-    write_api = FakeWriteApi()
-
-    monkeypatch.setattr(svc_module, "get_influx_client", lambda: fake_client)
-    monkeypatch.setattr(svc_module, "get_write_api", lambda _: write_api)
-    monkeypatch.setattr(
-        svc_module, "get_query_api", lambda _: SimpleNamespace(query=lambda query: [])
-    )
+async def test_initialize_prepares_storage_and_bot(monkeypatch, store, history):
     monkeypatch.setattr(svc_module, "TELEGRAM_BOT_TOKEN", "token")
     monkeypatch.setattr(svc_module, "TELEGRAM_CHAT_ID", "chat")
     monkeypatch.setattr(svc_module, "DEFAULT_USER_ID", "userx")
     monkeypatch.setattr(svc_module, "Bot", lambda token: SimpleNamespace(token=token))
 
-    service = svc_module.NotificationService(settings_store=store)
+    service = svc_module.NotificationService(settings_store=store, history_store=history)
     await service.initialize()
 
-    assert service.influx_client is fake_client
-    assert service.write_api is write_api
     assert service.telegram_bot is not None
     # A default user is derived from the environment so alerts are not dropped.
     assert "userx" in service.user_settings
 
 
 @pytest.mark.asyncio
-async def test_settings_are_persisted_not_written_to_influx(service, store):
+async def test_initialize_survives_an_unusable_history_store(monkeypatch, store):
+    """History is a record, not the job: alerts must still go out without it."""
+    monkeypatch.setattr(svc_module, "TELEGRAM_BOT_TOKEN", None)
+    unusable = HistoryStore("/proc/zuva-cannot-write-here/zuva.db")
+
+    service = svc_module.NotificationService(settings_store=store, history_store=unusable)
+    await service.initialize()
+
+    assert service.user_settings == {}
+
+
+@pytest.mark.asyncio
+async def test_settings_are_persisted_not_stored_as_history(service, store, history):
     settings = NotificationSettings(
         user_id="u1",
         enabled_channels=[NotificationChannel.TELEGRAM],
@@ -110,7 +108,7 @@ async def test_settings_are_persisted_not_written_to_influx(service, store):
     assert service.user_settings["u1"].min_severity == "high"
     # Configuration belongs in the settings store; a time-series write with a
     # bounded read range is what used to lose it on restart.
-    assert service.write_api.calls == []
+    assert history.recent_alerts("u1", hours=1) == []
     assert store.load_all()["u1"].telegram_chat_id == "chat1"
 
 
@@ -132,38 +130,6 @@ async def test_settings_survive_a_restart(service, store, monkeypatch):
 
     assert restarted.user_settings["u1"].telegram_chat_id == "chat1"
     assert restarted.user_settings["u1"].rate_limit_minutes == 10
-
-
-@pytest.mark.asyncio
-async def test_legacy_influx_settings_are_migrated_once(store, monkeypatch):
-    monkeypatch.setattr(svc_module, "TELEGRAM_BOT_TOKEN", None)
-    record = SimpleNamespace(values={
-        "user_id": "legacy",
-        "enabled_channels": "telegram",
-        "telegram_chat_id": "chat-legacy",
-        "quiet_hours_start": "23:00",
-        "quiet_hours_end": "06:00",
-        "min_severity": "high",
-        "rate_limit_minutes": 30,
-    })
-    table = SimpleNamespace(records=[record])
-    queries = []
-
-    def query(query):
-        queries.append(query)
-        return [table]
-
-    service = svc_module.NotificationService(settings_store=store)
-    service.query_api = SimpleNamespace(query=query)
-
-    await service._load_user_settings()
-
-    assert service.user_settings["legacy"].telegram_chat_id == "chat-legacy"
-    assert service.user_settings["legacy"].rate_limit_minutes == 30
-    # Unbounded range: the whole point is to find settings older than any window.
-    assert "range(start: 0)" in queries[0]
-    # Now in SQLite, so a second start does not need InfluxDB at all.
-    assert store.load_all()["legacy"].quiet_hours_start == "23:00"
 
 
 def test_is_quiet_hours_handles_midnight_window(service):
@@ -233,7 +199,7 @@ def test_severity_check_tolerates_unknown_values(service):
 
 
 @pytest.mark.asyncio
-async def test_send_alert_critical_battery_forces_critical_and_writes(service, monkeypatch):
+async def test_send_alert_critical_battery_forces_critical_and_writes(service, history, monkeypatch):
     service.user_settings["u1"] = make_settings()
     monkeypatch.setattr(service, "_is_quiet_hours", lambda _: False)
     monkeypatch.setattr(service, "_should_rate_limit", lambda *_: False)
@@ -246,8 +212,11 @@ async def test_send_alert_critical_battery_forces_critical_and_writes(service, m
     assert result["status"] == "sent"
     sent_alert = service._send_telegram.await_args.args[0]
     assert sent_alert.severity == AlertSeverity.CRITICAL
-    # Only alert history goes to InfluxDB.
-    assert len(service.write_api.calls) == 1
+    # The delivered severity is what the history records, not the requested one.
+    stored = history.recent_alerts("u1", hours=1)
+    assert len(stored) == 1
+    assert stored[0]["severity"] == "critical"
+    assert stored[0]["category"] == "battery_critical"
 
 
 @pytest.mark.asyncio
@@ -305,7 +274,7 @@ async def test_send_alert_without_channels_fails_loudly(service):
 
 
 @pytest.mark.asyncio
-async def test_failed_delivery_does_not_consume_the_rate_limit_window(service, monkeypatch):
+async def test_failed_delivery_does_not_consume_the_rate_limit_window(service, history, monkeypatch):
     """A Telegram outage must not silence the next real alert."""
     settings = make_settings()
     service.user_settings["u1"] = settings
@@ -316,7 +285,8 @@ async def test_failed_delivery_does_not_consume_the_rate_limit_window(service, m
 
     assert result == {"status": "failed", "reason": "all_channels_failed"}
     assert settings.last_alert_times == {}
-    assert service.write_api.calls == []
+    # Nothing was delivered, so nothing is recorded as sent.
+    assert history.recent_alerts("u1", hours=1) == []
 
 
 @pytest.mark.asyncio
@@ -372,12 +342,3 @@ async def test_send_telegram_formats_metadata(service):
     assert ok is True
     assert sent["chat_id"] == "chat"
     assert "battery_soc: 9" in sent["text"]
-
-
-@pytest.mark.asyncio
-async def test_shutdown_closes_client(service):
-    service.influx_client = FakeInfluxClient()
-
-    await service.shutdown()
-
-    assert service.influx_client.closed is True

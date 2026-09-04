@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-# Identifiers end up as InfluxDB tags and query values; keep them boring.
+# Identifiers end up in stored rows and path segments; keep them boring.
 USER_ID_PATTERN = r"^[A-Za-z0-9_.@-]{1,64}$"
 TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -68,6 +68,25 @@ class Alert(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     message: str = Field(min_length=1, max_length=2000)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TelemetryReading(BaseModel):
+    """One poll's inverter readings, as POSTed by the collector.
+
+    UNITS: every power value is watts, which the ``_w`` suffixes say out loud.
+    The InfluxDB schema this replaced stored watts in ``*_kw`` fields.
+    """
+
+    inverter_sn: str = Field(min_length=1, max_length=64)
+    plant_id: Optional[str] = Field(default=None, max_length=64)
+    load_power_w: float
+    grid_power_w: float
+    battery_soc: float
+    grid_voltage: Optional[float] = None
+    grid_status: Optional[int] = None
+    battery_power_w: Optional[float] = None
+    battery_voltage: Optional[float] = None
+    input_power_w: Optional[float] = None
 
 
 @dataclass

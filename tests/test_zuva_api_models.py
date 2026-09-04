@@ -57,7 +57,7 @@ def test_accepted_user_ids(user_id):
     "user_id", ["", "has space", "../etc/passwd", 'quote"', "a" * 65, "semi;colon"]
 )
 def test_rejected_user_ids(user_id):
-    # User ids become InfluxDB tags and query values; keep them boring.
+    # User ids end up in stored rows and URL path segments; keep them boring.
     with pytest.raises(ValidationError):
         NotificationSettings(user_id=user_id, enabled_channels=[])
 
