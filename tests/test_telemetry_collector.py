@@ -31,8 +31,8 @@ async def test_write_required_fields_only():
     await collector.write(
         inverter_sn="SN1",
         plant_id=123,
-        load_power_kw=2.1,
-        grid_power_kw=1.3,
+        load_power_w=2.1,
+        grid_power_w=1.3,
         battery_soc=57.0,
     )
 
@@ -54,14 +54,14 @@ async def test_write_includes_optional_fields():
     await collector.write(
         inverter_sn="SN2",
         plant_id=999,
-        load_power_kw=3.5,
-        grid_power_kw=0.0,
+        load_power_w=3.5,
+        grid_power_w=0.0,
         battery_soc=12.0,
         grid_voltage=230.0,
         grid_status=1,
-        battery_power_kw=-1.2,
+        battery_power_w=-1.2,
         battery_voltage=52.4,
-        input_power_kw=4.7,
+        input_power_w=4.7,
     )
 
     line = api.record.to_line_protocol()
@@ -79,7 +79,32 @@ async def test_write_handles_write_error_without_raise():
     await collector.write(
         inverter_sn="SN3",
         plant_id=1,
-        load_power_kw=0.1,
-        grid_power_kw=0.0,
+        load_power_w=0.1,
+        grid_power_w=0.0,
         battery_soc=99.0,
     )
+
+
+@pytest.mark.asyncio
+async def test_watt_arguments_keep_the_legacy_kw_field_names():
+    """The stored field names still end in ``_kw`` on purpose.
+
+    Renaming them would split the historical series and break every existing
+    dashboard query, so the mapping is asserted here to stop a well-meaning
+    rename from happening silently.
+    """
+    api = CaptureWriteApi()
+    collector = TelemetryCollector(api, "solar_data")
+
+    await collector.write(
+        inverter_sn="SN4",
+        plant_id=7,
+        load_power_w=812.0,
+        grid_power_w=-45.0,
+        battery_soc=64.0,
+    )
+
+    line = api.record.to_line_protocol()
+    assert "load_power_kw=812" in line
+    assert "grid_power_kw=-45" in line
+    assert "load_power_w=" not in line
