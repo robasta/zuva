@@ -187,6 +187,21 @@ async def test_repeated_logins_are_throttled(api):
 
 
 @pytest.mark.asyncio
+async def test_first_login_is_never_throttled_on_a_freshly_booted_host(api, monkeypatch):
+    """time.monotonic() counts from boot, so on a new host it is a small number.
+
+    The throttle must key off "has a login been attempted", not off a sentinel
+    timestamp that a low uptime makes look recent.
+    """
+    monkeypatch.setattr("sunsynk.client.time.monotonic", lambda: 3.0)
+    client = make_client(api)
+
+    await client.login()
+
+    assert client.access_token == ACCESS_TOKEN
+
+
+@pytest.mark.asyncio
 async def test_force_bypasses_the_login_throttle(api):
     """Token refresh after a 401 is not a retry of a failed login."""
     client = make_client(api)

@@ -148,8 +148,10 @@ class SunsynkClient:
         self.refresh_token = None
         self.username = username
         self.password = password
-        self._last_login_attempt = 0.0
-        self._last_login_failure = 0.0
+        # None until the first attempt. Not 0.0: time.monotonic() counts from an
+        # arbitrary epoch (uptime on Linux), so on a freshly booted host 0.0
+        # reads as "a moment ago" and throttles the very first login.
+        self._last_login_attempt = None
         self._login_rate_limit_seconds = float(os.getenv("SUNSYNK_LOGIN_RATE_LIMIT_SECONDS", "60"))
 
     async def __aenter__(self):
@@ -318,12 +320,13 @@ class SunsynkClient:
         for token refresh after a 401, which is not a retry of a failed login).
         """
         now = time.monotonic()
-        elapsed = now - self._last_login_attempt
-        if not force and elapsed < self._login_rate_limit_seconds:
-            remaining = int(self._login_rate_limit_seconds - elapsed)
-            raise LoginRateLimitedException(
-                f"Login rate limited. Retry after {remaining}s."
-            )
+        if not force and self._last_login_attempt is not None:
+            elapsed = now - self._last_login_attempt
+            if elapsed < self._login_rate_limit_seconds:
+                remaining = int(self._login_rate_limit_seconds - elapsed)
+                raise LoginRateLimitedException(
+                    f"Login rate limited. Retry after {remaining}s."
+                )
         self._last_login_attempt = now
 
         # Determine source based on base URL
@@ -344,7 +347,6 @@ class SunsynkClient:
         )
         if resp.status != 200:
             body_text = await resp.text()
-            self._last_login_failure = time.monotonic()
             raise SunsynkApiError(
                 resp.status,
                 message='Public key request failed',
@@ -353,7 +355,6 @@ class SunsynkClient:
 
         resp_body = await resp.json()
         if not resp_body['success']:
-            self._last_login_failure = time.monotonic()
             raise InvalidCredentialsException()
 
         public_key_string = resp_body['data']
@@ -409,7 +410,6 @@ class SunsynkClient:
 
             # Verification code required
             if resp_body.get('code') == 114:
-                self._last_login_failure = time.monotonic()
                 if self.verification_code:
                     raise VerificationCodeRequiredException(
                         'Verification code rejected/expired. Request a new one and retry.'
@@ -421,12 +421,10 @@ class SunsynkClient:
                     'Too many login failures; verification code required. '
                     'Call request_verification_code() and retry with `verification_code` (payload field `code`).'
                 )
-            self._last_login_failure = time.monotonic()
             raise InvalidCredentialsException()
         text = await resp.text()
         if self.debug:
             logger.debug("Login failed: %s", text[:500])
-        self._last_login_failure = time.monotonic()
         raise SunsynkApiError(resp.status, message='Token request failed', response_body=text)
 
     def __url(self, path: str) -> str:
