@@ -1,10 +1,12 @@
-import aiohttp
+import asyncio
+import base64
+import hashlib
+import logging
+import os
 import ssl
 import time
-import hashlib
-import base64
-import os
-import asyncio
+
+import aiohttp
 from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
@@ -14,6 +16,15 @@ from sunsynk.input import Input
 from sunsynk.inverter import Inverter
 from sunsynk.output import Output
 from sunsynk.plant import Plant
+
+logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 class InvalidCredentialsException(Exception):
@@ -49,6 +60,15 @@ class SunsynkTimeoutError(Exception):
 
 
 class SunsynkClient:
+    """Async client for the Sunsynk API.
+
+    TLS certificates are verified by default. Verification can only be disabled
+    explicitly (``verify_tls=False`` or ``SUNSYNK_VERIFY_TLS=false``) and is
+    intended for local development against a proxy, never for deployment.
+
+    The aiohttp session is created on first use rather than in the constructor,
+    so a client that is built but never logged in cannot leak a session.
+    """
 
     @classmethod
     async def create(
@@ -62,6 +82,7 @@ class SunsynkClient:
         connect_timeout_seconds: float | None = None,
         max_retries: int | None = None,
         retry_base_delay_seconds: float | None = None,
+        verify_tls: bool | None = None,
     ):
         self = SunsynkClient(
             username,
@@ -73,6 +94,7 @@ class SunsynkClient:
             connect_timeout_seconds=connect_timeout_seconds,
             max_retries=max_retries,
             retry_base_delay_seconds=retry_base_delay_seconds,
+            verify_tls=verify_tls,
         )
         return await self.login()
 
@@ -87,6 +109,7 @@ class SunsynkClient:
         connect_timeout_seconds: float | None = None,
         max_retries: int | None = None,
         retry_base_delay_seconds: float | None = None,
+        verify_tls: bool | None = None,
     ):
         self.base_url = 'https://api.sunsynk.net' if base_url is None else base_url
         self.debug = debug
@@ -111,15 +134,16 @@ class SunsynkClient:
             if retry_base_delay_seconds is not None
             else float(os.getenv("SUNSYNK_RETRY_BASE_DELAY_SECONDS", "0.5"))
         )
-        
-        # Create SSL context that doesn't verify certificates
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-        
-        connector = aiohttp.TCPConnector(ssl=ssl_context)
-        self.session = aiohttp.ClientSession(connector=connector)
-        
+        self.verify_tls = (
+            bool(verify_tls)
+            if verify_tls is not None
+            else _env_flag("SUNSYNK_VERIFY_TLS", True)
+        )
+
+        # Session is created lazily by __ensure_session so that constructing a
+        # client without using it never opens (and leaks) a connection pool.
+        self.session = None
+
         self.access_token = None
         self.refresh_token = None
         self.username = username
@@ -141,8 +165,25 @@ class SunsynkClient:
         await self.close()
 
     async def close(self):
-        if self.session and not self.session.closed:
+        if self.session is not None and not self.session.closed:
             await self.session.close()
+
+    def __connector(self) -> aiohttp.TCPConnector:
+        if self.verify_tls:
+            return aiohttp.TCPConnector()
+        logger.warning(
+            "TLS certificate verification is DISABLED for %s. "
+            "This is unsafe outside local development.",
+            self.base_url,
+        )
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        return aiohttp.TCPConnector(ssl=ssl_context)
+
+    def __ensure_session(self):
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession(connector=self.__connector())
 
     async def request_verification_code(self):
         """Request a login verification code for this username.
@@ -198,7 +239,9 @@ class SunsynkClient:
     async def __get(self, path: str, attempts: int = 1):
         resp = await self.__request(method='GET', path=path, headers=self.__headers())
         if resp.status == 401 and attempts == 1:
-            await self.login()
+            # A rejected token is not a login loop: bypass the login throttle so
+            # that an expired token within the throttle window stays recoverable.
+            await self.login(force=True)
             return await self.__get(path, attempts=attempts + 1)
         if resp.status != 200:
             text = await resp.text()
@@ -218,6 +261,7 @@ class SunsynkClient:
         timeout: aiohttp.ClientTimeout | None = None,
         retry_on_network_error: bool = True,
     ):
+        self.__ensure_session()
         max_retries = self.max_retries if retry_on_network_error else 0
         request_timeout = timeout or self.__timeout()
         last_error = None
@@ -258,33 +302,6 @@ class SunsynkClient:
             raise SunsynkConnectionError(f'{method} {path} connection failed') from last_error
         raise SunsynkConnectionError(f'{method} {path} request failed')
 
-    async def _notify_login_failure(self, reason: str):
-        token = os.getenv("TELEGRAM_BOT_TOKEN")
-        chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        if not token or not chat_id:
-            return
-
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        message = (
-            "Sunsynk login failed\n"
-            f"User: {self.username}\n"
-            f"Base URL: {self.base_url}\n"
-            f"Time: {timestamp}\n"
-            f"Reason: {reason}"
-        )
-
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {"chat_id": chat_id, "text": message}
-        try:
-            await self.session.post(
-                url,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=10, connect=self.connect_timeout_seconds),
-            )
-        except Exception:
-            if self.debug:
-                print("Telegram notification failed")
-
     def __headers(self) -> dict[str, str]:
         headers = {
             "Content-Type": "application/json"
@@ -293,10 +310,16 @@ class SunsynkClient:
             headers['Authorization'] = f"Bearer {self.access_token}"
         return headers
 
-    async def login(self):
+    async def login(self, force: bool = False):
+        """Authenticate and store an access token.
+
+        Raises LoginRateLimitedException when called more often than
+        SUNSYNK_LOGIN_RATE_LIMIT_SECONDS allows, unless ``force`` is set (used
+        for token refresh after a 401, which is not a retry of a failed login).
+        """
         now = time.monotonic()
         elapsed = now - self._last_login_attempt
-        if elapsed < self._login_rate_limit_seconds:
+        if not force and elapsed < self._login_rate_limit_seconds:
             remaining = int(self._login_rate_limit_seconds - elapsed)
             raise LoginRateLimitedException(
                 f"Login rate limited. Retry after {remaining}s."
@@ -305,14 +328,14 @@ class SunsynkClient:
 
         # Determine source based on base URL
         source = 'elinter' if 'inteless' in self.base_url else 'sunsynk'
-        
+
         # Get public key
         nonce = int(time.time() * 1000)
         sign_string = f"nonce={nonce}&source={source}POWER_VIEW"
         sign = hashlib.md5(sign_string.encode()).hexdigest()
-        
+
         params = {'source': source, 'nonce': nonce, 'sign': sign}
-        
+
         resp = await self.__request(
             method='GET',
             path='anonymous/publicKey',
@@ -322,35 +345,33 @@ class SunsynkClient:
         if resp.status != 200:
             body_text = await resp.text()
             self._last_login_failure = time.monotonic()
-            await self._notify_login_failure(f"publicKey request failed (status {resp.status})")
             raise SunsynkApiError(
                 resp.status,
                 message='Public key request failed',
                 response_body=body_text,
             )
-        
+
         resp_body = await resp.json()
         if not resp_body['success']:
             self._last_login_failure = time.monotonic()
-            await self._notify_login_failure("publicKey response not successful")
             raise InvalidCredentialsException()
-        
+
         public_key_string = resp_body['data']
-        
+
         # Encrypt password - format public key properly
         pem_key = f"-----BEGIN PUBLIC KEY-----\n{public_key_string}\n-----END PUBLIC KEY-----"
         public_key = load_pem_public_key(pem_key.encode('utf-8'))
         encrypted_password = base64.b64encode(
             public_key.encrypt(self.password.encode('utf-8'), PKCS1v15())
         ).decode('utf-8')
-        
+
         # Login with encrypted password and sign
         token_nonce = int(time.time() * 1000)
         # Matches Sunsynk web client behavior:
         # r = f"nonce={nonce}&source={payload.source}"; sign = md5(r + publicKey[:10])
         token_sign_string = f"nonce={token_nonce}&source={source}{public_key_string[:10]}"
         token_sign = hashlib.md5(token_sign_string.encode()).hexdigest()
-        
+
         payload = {
             'username': self.username,
             'password': encrypted_password,
@@ -364,14 +385,13 @@ class SunsynkClient:
         # Optional verification/captcha code required after repeated failures (API returns code=114)
         if self.verification_code:
             payload['code'] = self.verification_code
-        
-        url = self.__url('oauth/token/new')
+
         if self.debug:
             safe_payload = dict(payload)
             safe_payload['password'] = '<redacted>'
-            print(f"Login URL: {url}")
-            print(f"Username: {self.username}")
-            print(f"Login request body: {safe_payload}")
+            logger.debug("Login URL: %s", self.__url('oauth/token/new'))
+            logger.debug("Username: %s", self.username)
+            logger.debug("Login request body: %s", safe_payload)
         resp = await self.__request(
             method='POST',
             path='oauth/token/new',
@@ -379,11 +399,9 @@ class SunsynkClient:
             json=payload,
         )
         if self.debug:
-            print(f"Login response status: {resp.status}")
+            logger.debug("Login response status: %s", resp.status)
         if resp.status == 200:
             resp_body = await resp.json()
-            if self.debug:
-                print(f"Login response: {resp_body}")
             if resp_body.get('success'):
                 self.access_token = resp_body['data']['access_token']
                 self.refresh_token = resp_body['data']['refresh_token']
@@ -392,7 +410,6 @@ class SunsynkClient:
             # Verification code required
             if resp_body.get('code') == 114:
                 self._last_login_failure = time.monotonic()
-                await self._notify_login_failure("verification code required")
                 if self.verification_code:
                     raise VerificationCodeRequiredException(
                         'Verification code rejected/expired. Request a new one and retry.'
@@ -405,13 +422,11 @@ class SunsynkClient:
                     'Call request_verification_code() and retry with `verification_code` (payload field `code`).'
                 )
             self._last_login_failure = time.monotonic()
-            await self._notify_login_failure("token response not successful")
             raise InvalidCredentialsException()
         text = await resp.text()
         if self.debug:
-            print(f"Login failed: {text[:500]}")
+            logger.debug("Login failed: %s", text[:500])
         self._last_login_failure = time.monotonic()
-        await self._notify_login_failure(f"token request failed (status {resp.status})")
         raise SunsynkApiError(resp.status, message='Token request failed', response_body=text)
 
     def __url(self, path: str) -> str:

@@ -42,7 +42,8 @@ class FakeSession:
 
 async def _build_client(fake_session: FakeSession, **kwargs) -> SunsynkClient:
     client = SunsynkClient("user", "pass", **kwargs)
-    await client.session.close()
+    # The real client creates its session lazily on first request; pre-seeding it
+    # here means no socket is ever opened.
     client.session = fake_session
     return client
 
@@ -118,3 +119,30 @@ async def test_get_401_refreshes_token_once():
 
     assert response.status == 200
     client.login.assert_awaited_once()
+    # A rejected token must bypass the login throttle, otherwise the retry is
+    # guaranteed to raise LoginRateLimitedException instead of recovering.
+    assert client.login.await_args.kwargs == {"force": True}
+
+
+def test_verify_tls_defaults_on(monkeypatch):
+    monkeypatch.delenv("SUNSYNK_VERIFY_TLS", raising=False)
+    assert SunsynkClient("user", "pass").verify_tls is True
+
+
+def test_verify_tls_can_be_disabled_by_env(monkeypatch):
+    monkeypatch.setenv("SUNSYNK_VERIFY_TLS", "false")
+    assert SunsynkClient("user", "pass").verify_tls is False
+
+
+def test_verify_tls_argument_beats_env(monkeypatch):
+    monkeypatch.setenv("SUNSYNK_VERIFY_TLS", "false")
+    assert SunsynkClient("user", "pass", verify_tls=True).verify_tls is True
+
+
+def test_session_is_not_created_in_constructor():
+    assert SunsynkClient("user", "pass").session is None
+
+
+@pytest.mark.asyncio
+async def test_close_is_safe_without_a_session():
+    await SunsynkClient("user", "pass").close()
