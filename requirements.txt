@@ -1,3 +1,4 @@
+# Runtime dependencies of the sunsynk client package (setup.py reads this
+# file for install_requires), so nothing test- or script-only belongs here.
 aiohttp==3.9.1
 cryptography==41.0.7
-python-dotenv==1.0.0

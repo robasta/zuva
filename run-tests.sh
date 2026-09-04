@@ -1,29 +1,27 @@
 #!/usr/bin/env bash
+# Runs the whole suite with coverage over all three packages.
+#
+#   ./run-tests.sh                       # everything
+#   ./run-tests.sh tests/test_alert_logic.py
+#   ./run-tests.sh -k grid_outage
 set -e
 
-if ! ./venv/bin/python -c "import pytest, pytest_asyncio, pytest_cov" >/dev/null 2>&1; then
-  ./venv/bin/pip install pytest pytest-asyncio pytest-cov
+if [ ! -x ./venv/bin/python ]; then
+  echo "No virtualenv found. Run ./scripts/setup.sh first." >&2
+  exit 1
 fi
 
-if ! ./venv/bin/python -c "import influxdb_client" >/dev/null 2>&1; then
-  ./venv/bin/pip install influxdb-client
+# One check for the whole dev set instead of a chain of per-package installs.
+if ! ./venv/bin/python -c "import pytest, pytest_asyncio, pytest_cov, influxdb_client, fastapi, pydantic, httpx" >/dev/null 2>&1; then
+  ./venv/bin/pip install -q -r requirements-dev.txt
 fi
 
-# API tests import FastAPI/Pydantic and use TestClient backed by httpx.
-if ! ./venv/bin/python -c "import fastapi, pydantic, httpx" >/dev/null 2>&1; then
-  ./venv/bin/pip install fastapi pydantic httpx
-fi
-
-PYTHONPATH=. ./venv/bin/pytest \
+# Test discovery comes from pytest.ini (testpaths + pythonpath), so new test
+# files are picked up without editing this script.
+exec ./venv/bin/pytest \
+  --cov=sunsynk \
   --cov=zuva \
   --cov=zuva_api \
   --cov-report=term-missing \
-  tests/test_alert_monitor.py \
-  tests/test_alert_logic.py \
-  tests/test_notification_sender.py \
-  tests/test_telemetry_collector.py \
-  tests/test_client_network_errors.py \
-  tests/test_zuva_api_models.py \
-  tests/test_zuva_api_db.py \
-  tests/test_zuva_api_notification_service.py \
-  tests/test_zuva_api_main.py
+  --cov-fail-under=85 \
+  "$@"

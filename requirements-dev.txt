@@ -1,0 +1,23 @@
+# Everything needed to run the test suite and linter.
+# The three deployable packages each have their own runtime requirements:
+#   sunsynk/        -> requirements.txt
+#   zuva/collector/ -> zuva/collector/requirements.txt
+#   zuva_api/       -> zuva_api/requirements.txt
+-r requirements.txt
+
+pytest==7.4.2
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+# 2.17.x crashes with astroid errors on the pydantic models in zuva_api.
+pylint==3.0.3
+
+# Imported by the collector and API tests. python-telegram-bot is deliberately
+# absent: notification_service falls back to a stub when it is missing, and the
+# tests inject their own bot object.
+influxdb-client==1.38.0
+fastapi==0.104.1
+pydantic==2.5.0
+httpx==0.25.2
+
+# Only scripts/manual/ reads a .env file; the services take plain env vars.
+python-dotenv==1.0.0
