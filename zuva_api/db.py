@@ -1,5 +1,5 @@
 import os
-from influxdb_client import InfluxDBClient, Point
+from influxdb_client import InfluxDBClient
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://influxdb:8086")
