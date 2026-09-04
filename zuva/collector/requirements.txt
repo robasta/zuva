@@ -1,9 +1,9 @@
 # Runtime dependencies of the collector image. Anything not imported by
 # zuva/collector or sunsynk stays out: every extra wheel is image size and
-# vulnerability surface for a process that only polls an API and writes points.
+# vulnerability surface for a process that polls one API and posts to another.
+# No database driver: telemetry and alerts both go to zuva-api over HTTP.
 aiohttp==3.9.1
 cryptography==41.0.7
-influxdb-client==1.38.0
 
 # zoneinfo needs a tz database, which slim images do not ship. Without this
 # TIMEZONE=Africa/Johannesburg falls back to UTC and the evening-consumption

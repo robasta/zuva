@@ -13,20 +13,6 @@ from sunsynk.client import (
 )
 
 
-class FakeInfluxClient:
-    def __init__(self, *args, **kwargs):
-        self.closed = False
-
-    def write_api(self, write_options=None):
-        return object()
-
-    def query_api(self):
-        return object()
-
-    def close(self):
-        self.closed = True
-
-
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path, monkeypatch):
     """Keep the collector's state and heartbeat files inside tmp_path."""
@@ -35,7 +21,6 @@ def isolated_state(tmp_path, monkeypatch):
 
 
 def make_orchestrator(monkeypatch):
-    monkeypatch.setattr(orchestrator_module, "InfluxDBClient", FakeInfluxClient)
     orchestrator = orchestrator_module.AlertOrchestrator()
     orchestrator.notification.send = AsyncMock()
     orchestrator.notification.aclose = AsyncMock()
@@ -167,13 +152,19 @@ async def test_monitor_loop_returns_when_credentials_missing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_shutdown_closes_influx_client_and_session(monkeypatch):
+async def test_shutdown_closes_the_api_session(monkeypatch):
     orchestrator = make_orchestrator(monkeypatch)
 
     await orchestrator.shutdown()
 
-    assert orchestrator.influx_client.closed is True
     orchestrator.notification.aclose.assert_awaited_once()
+
+
+def test_telemetry_and_alerts_share_one_api_client(monkeypatch):
+    """The collector holds no storage credentials; zuva-api owns the database."""
+    orchestrator = make_orchestrator(monkeypatch)
+
+    assert orchestrator.telemetry.api_client is orchestrator.notification
 
 
 def make_fake_client():

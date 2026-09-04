@@ -6,9 +6,6 @@ import asyncio
 import logging
 import os
 
-from influxdb_client import InfluxDBClient
-from influxdb_client.client.write_api import SYNCHRONOUS
-
 # The image puts the sunsynk package on PYTHONPATH (see Dockerfile), so no
 # sys.path manipulation is needed here.
 from sunsynk.client import (
@@ -41,11 +38,6 @@ LOGIN_RETRY_WAIT_SECONDS = int(os.getenv("LOGIN_RETRY_WAIT_SECONDS", "900"))
 # Bad credentials do not heal on their own, and repeated failed logins are what
 # makes Sunsynk demand a verification code. Back off hard instead of hammering.
 AUTH_FAILURE_BACKOFF_SECONDS = int(os.getenv("AUTH_FAILURE_BACKOFF_SECONDS", "21600"))
-
-INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://influxdb:8086")
-INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "sunsynk-token")
-INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "sunsynk")
-INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "solar_data")
 
 NOTIFICATION_API_URL = os.getenv("NOTIFICATION_API_URL", "http://zuva-api:8001")
 ZUVA_API_KEY = os.getenv("ZUVA_API_KEY")
@@ -94,17 +86,12 @@ ALERT_CONFIG = {
 
 class AlertOrchestrator:
     def __init__(self):
-        self.influx_client = InfluxDBClient(
-            url=INFLUXDB_URL,
-            token=INFLUXDB_TOKEN,
-            org=INFLUXDB_ORG
-        )
-        self.write_api = self.influx_client.write_api(write_options=SYNCHRONOUS)
-        self.query_api = self.influx_client.query_api()
-        self.telemetry = TelemetryCollector(self.write_api, INFLUXDB_BUCKET)
+        # One HTTP client to zuva-api for both alerts and telemetry: the API owns
+        # the database, so the collector needs no storage credentials at all.
         self.notification = NotificationSender(
             NOTIFICATION_API_URL, DEFAULT_USER_ID, api_key=ZUVA_API_KEY
         )
+        self.telemetry = TelemetryCollector(self.notification)
         self.alerter = AlertEvaluator(ALERT_CONFIG, self.notification, state_store=StateStore())
 
     async def connect_client_with_retry(self):
@@ -256,7 +243,6 @@ class AlertOrchestrator:
         if not SUNSYNK_USERNAME or not SUNSYNK_PASSWORD:
             logger.error("SUNSYNK_USERNAME and SUNSYNK_PASSWORD must be set")
             return
-        logger.info("InfluxDB connection initialized")
         while True:
             client, retry_wait = await self.connect_client_with_retry()
             if client is None:
@@ -284,8 +270,6 @@ class AlertOrchestrator:
 
     async def shutdown(self):
         await self.notification.aclose()
-        if self.influx_client:
-            self.influx_client.close()
 
 
 async def main():

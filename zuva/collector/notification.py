@@ -6,10 +6,11 @@ import aiohttp
 
 
 class NotificationSender:
-    """Posts alerts to the notification API.
+    """The collector's HTTP client for zuva-api: alerts and telemetry.
 
     Holds one aiohttp session for the process lifetime rather than building a
-    connection pool per alert.
+    connection pool per request. Nothing here raises: a notification API that is
+    down must not take the poll loop with it.
     """
 
     def __init__(self, api_url, user_id, api_key=None, timeout_seconds=None):
@@ -76,29 +77,41 @@ class NotificationSender:
             "message": message,
             "metadata": metadata or {}
         }
+        await self._post(
+            "/alert",
+            payload,
+            params={"user_id": self.user_id},
+            description=f"alert {category}",
+        )
 
+    async def send_telemetry(self, reading):
+        """POST one poll's readings. zuva-api owns the database, not the collector."""
+        await self._post("/telemetry", reading, params=None, description="telemetry")
+
+    async def _post(self, path, payload, params, description):
         session = self._ensure_session()
         for index, api_url in enumerate(self.api_urls):
             try:
                 async with session.post(
-                    f"{api_url}/alert",
+                    f"{api_url}{path}",
                     json=payload,
-                    params={"user_id": self.user_id},
+                    params=params,
                     headers=self._headers(),
                 ) as response:
                     if response.status == 200:
-                        self.logger.info("Alert sent: %s", category)
+                        self.logger.info("Sent %s", description)
                         return
                     body = await self._safe_body(response)
                     self.logger.error(
-                        "Failed to send alert via %s: %s %s", api_url, response.status, body
+                        "Failed to send %s via %s: %s %s",
+                        description, api_url, response.status, body,
                     )
             except Exception as error:  # pylint: disable=broad-except
-                self.logger.error("Error sending alert via %s: %s", api_url, error)
+                self.logger.error("Error sending %s via %s: %s", description, api_url, error)
 
             if index < len(self.api_urls) - 1:
                 self.logger.warning(
-                    "Retrying alert delivery with fallback URL: %s", self.api_urls[index + 1]
+                    "Retrying %s with fallback URL: %s", description, self.api_urls[index + 1]
                 )
 
     @staticmethod

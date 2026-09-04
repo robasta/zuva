@@ -8,25 +8,23 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from zuva.collector.telemetry import TelemetryCollector
 
 
-class CaptureWriteApi:
+class CaptureClient:
     def __init__(self):
-        self.bucket = None
-        self.record = None
+        self.readings = []
 
-    def write(self, bucket, record):
-        self.bucket = bucket
-        self.record = record
+    async def send_telemetry(self, reading):
+        self.readings.append(reading)
 
 
-class ExplodingWriteApi:
-    def write(self, bucket, record):
-        raise RuntimeError("write failed")
+class ExplodingClient:
+    async def send_telemetry(self, reading):
+        raise RuntimeError("post failed")
 
 
 @pytest.mark.asyncio
 async def test_write_required_fields_only():
-    api = CaptureWriteApi()
-    collector = TelemetryCollector(api, "solar_data")
+    client = CaptureClient()
+    collector = TelemetryCollector(client)
 
     await collector.write(
         inverter_sn="SN1",
@@ -36,20 +34,21 @@ async def test_write_required_fields_only():
         battery_soc=57.0,
     )
 
-    assert api.bucket == "solar_data"
-    line = api.record.to_line_protocol()
-    assert "usage_readings" in line
-    assert "inverter_sn=SN1" in line
-    assert "plant_id=123" in line
-    assert "load_power_kw=2.1" in line
-    assert "grid_power_kw=1.3" in line
-    assert "battery_soc=57" in line
+    assert client.readings == [
+        {
+            "inverter_sn": "SN1",
+            "plant_id": "123",
+            "load_power_w": 2.1,
+            "grid_power_w": 1.3,
+            "battery_soc": 57.0,
+        }
+    ]
 
 
 @pytest.mark.asyncio
 async def test_write_includes_optional_fields():
-    api = CaptureWriteApi()
-    collector = TelemetryCollector(api, "solar_data")
+    client = CaptureClient()
+    collector = TelemetryCollector(client)
 
     await collector.write(
         inverter_sn="SN2",
@@ -64,20 +63,42 @@ async def test_write_includes_optional_fields():
         input_power_w=4.7,
     )
 
-    line = api.record.to_line_protocol()
-    assert "grid_voltage=230" in line
-    assert "grid_status=1i" in line
-    assert "battery_power_kw=-1.2" in line
-    assert "battery_voltage=52.4" in line
-    assert "input_power_kw=4.7" in line
+    reading = client.readings[0]
+    assert reading["grid_voltage"] == 230.0
+    assert reading["grid_status"] == 1
+    assert reading["battery_power_w"] == -1.2
+    assert reading["battery_voltage"] == 52.4
+    assert reading["input_power_w"] == 4.7
 
 
 @pytest.mark.asyncio
-async def test_write_handles_write_error_without_raise():
-    collector = TelemetryCollector(ExplodingWriteApi(), "solar_data")
+async def test_missing_optional_fields_are_omitted_not_nulled():
+    """A value the inverter did not report is not the same as zero."""
+    client = CaptureClient()
+    collector = TelemetryCollector(client)
 
     await collector.write(
         inverter_sn="SN3",
+        plant_id=1,
+        load_power_w=0.1,
+        grid_power_w=0.0,
+        battery_soc=99.0,
+        grid_voltage=None,
+        battery_power_w=48.0,
+    )
+
+    reading = client.readings[0]
+    assert "grid_voltage" not in reading
+    assert reading["battery_power_w"] == 48.0
+
+
+@pytest.mark.asyncio
+async def test_write_handles_post_error_without_raise():
+    """Losing a reading must not stop the alert checks later in the poll."""
+    collector = TelemetryCollector(ExplodingClient())
+
+    await collector.write(
+        inverter_sn="SN4",
         plant_id=1,
         load_power_w=0.1,
         grid_power_w=0.0,
@@ -86,25 +107,24 @@ async def test_write_handles_write_error_without_raise():
 
 
 @pytest.mark.asyncio
-async def test_watt_arguments_keep_the_legacy_kw_field_names():
-    """The stored field names still end in ``_kw`` on purpose.
+async def test_watt_arguments_keep_their_unit_in_the_payload():
+    """The stored names say watts, because the values are watts.
 
-    Renaming them would split the historical series and break every existing
-    dashboard query, so the mapping is asserted here to stop a well-meaning
-    rename from happening silently.
+    The InfluxDB schema this replaced held watt values in ``*_kw`` fields; that
+    mismatch went away with the measurement that pinned it.
     """
-    api = CaptureWriteApi()
-    collector = TelemetryCollector(api, "solar_data")
+    client = CaptureClient()
+    collector = TelemetryCollector(client)
 
     await collector.write(
-        inverter_sn="SN4",
+        inverter_sn="SN5",
         plant_id=7,
         load_power_w=812.0,
         grid_power_w=-45.0,
         battery_soc=64.0,
     )
 
-    line = api.record.to_line_protocol()
-    assert "load_power_kw=812" in line
-    assert "grid_power_kw=-45" in line
-    assert "load_power_w=" not in line
+    reading = client.readings[0]
+    assert reading["load_power_w"] == 812.0
+    assert reading["grid_power_w"] == -45.0
+    assert not [name for name in reading if name.endswith("_kw")]

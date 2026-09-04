@@ -151,6 +151,42 @@ async def test_aclose_is_safe_before_any_alert():
     await NotificationSender("http://api", "u9", api_key="secret").aclose()
 
 
+@pytest.mark.asyncio
+async def test_send_telemetry_posts_the_reading(monkeypatch):
+    session = FakeSession()
+    install_session(monkeypatch, session)
+
+    sender = NotificationSender("http://api", "u10", api_key="secret")
+    await sender.send_telemetry({"inverter_sn": "SN1", "load_power_w": 812.0})
+
+    assert session.capture["url"] == "http://api/telemetry"
+    assert session.capture["json"] == {"inverter_sn": "SN1", "load_power_w": 812.0}
+    assert session.capture["headers"] == {"X-API-Key": "secret"}
+    # Telemetry is not per-user: the reading belongs to the inverter.
+    assert session.capture["params"] is None
+
+
+@pytest.mark.asyncio
+async def test_send_telemetry_shares_the_alert_session(monkeypatch):
+    session = FakeSession()
+    calls = install_session(monkeypatch, session)
+
+    sender = NotificationSender("http://api", "u11", api_key="secret")
+    await sender.send("grid_outage", "high", "Title", "Message", {})
+    await sender.send_telemetry({"inverter_sn": "SN1"})
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_send_telemetry_survives_a_rejected_post(monkeypatch):
+    """A 500 from the API must not take the poll loop down."""
+    install_session(monkeypatch, FakeSession(status=500))
+
+    sender = NotificationSender("http://api", "u12", api_key="secret")
+    await sender.send_telemetry({"inverter_sn": "SN1"})
+
+
 def test_builds_localhost_fallback_for_docker_service_name():
     sender = NotificationSender("http://zuva-api:8001", "u5", api_key="secret")
 
