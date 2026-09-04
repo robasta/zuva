@@ -7,60 +7,38 @@ still reporting healthy. Rate-limit timestamps had the same problem in reverse:
 being memory-only, a restart re-armed every category and could flood the user.
 
 SQLite gives both durability and simple atomic updates. The file lives on a
-mounted volume (``SETTINGS_DB_PATH``).
+mounted volume (``SETTINGS_DB_PATH``) and is shared with the alert and telemetry
+history (see ``history_store``).
 """
 import logging
-import os
-import sqlite3
-from contextlib import contextmanager
 from datetime import datetime
 
 from .models import UserSettings
+from .sqlite_store import DEFAULT_DB_PATH, SqliteStore
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = "/data/zuva.db"
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS user_settings (
-    user_id TEXT PRIMARY KEY,
-    enabled_channels TEXT NOT NULL,
-    telegram_chat_id TEXT,
-    quiet_hours_start TEXT NOT NULL,
-    quiet_hours_end TEXT NOT NULL,
-    min_severity TEXT NOT NULL,
-    rate_limit_minutes INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS alert_state (
-    user_id TEXT NOT NULL,
-    category TEXT NOT NULL,
-    last_sent_at TEXT NOT NULL,
-    PRIMARY KEY (user_id, category)
-);
-"""
+__all__ = ["DEFAULT_DB_PATH", "SettingsStore"]
 
 
-class SettingsStore:
-    def __init__(self, path: str | None = None):
-        self.path = path or os.getenv("SETTINGS_DB_PATH", DEFAULT_DB_PATH)
-
-    def initialize(self) -> None:
-        directory = os.path.dirname(self.path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        with self._connect() as conn:
-            conn.executescript(SCHEMA)
-        logger.info("Settings store ready at %s", self.path)
-
-    @contextmanager
-    def _connect(self):
-        conn = sqlite3.connect(self.path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
+class SettingsStore(SqliteStore):
+    SCHEMA = """
+    CREATE TABLE IF NOT EXISTS user_settings (
+        user_id TEXT PRIMARY KEY,
+        enabled_channels TEXT NOT NULL,
+        telegram_chat_id TEXT,
+        quiet_hours_start TEXT NOT NULL,
+        quiet_hours_end TEXT NOT NULL,
+        min_severity TEXT NOT NULL,
+        rate_limit_minutes INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS alert_state (
+        user_id TEXT NOT NULL,
+        category TEXT NOT NULL,
+        last_sent_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, category)
+    );
+    """
 
     # -- settings ----------------------------------------------------------
 
