@@ -1,5 +1,9 @@
-"""
-Test script for the Sunsynk API client.
+"""Manual check that real Sunsynk credentials work end to end.
+
+Hits the live Sunsynk API, so it is not part of the pytest suite. Reads
+credentials from ``zuva/.env``:
+
+    ./venv/bin/python scripts/manual/check_sunsynk_login.py
 """
 import asyncio
 import os
@@ -37,17 +41,18 @@ async def main():
             sn = inverters[0].sn
             print(f"\n📊 Realtime data for inverter {sn}:")
             
+            # Power values are watts, as reported by the inverter.
             battery = await client.get_inverter_realtime_battery(sn)
-            print(f"  Battery: {battery.get_power():.2f} kW, {battery.get_voltage():.1f} V, {battery.soc}% SoC")
-            
+            print(f"  Battery: {battery.get_power():.0f} W, {battery.get_voltage():.1f} V, {battery.soc}% SoC")
+
             grid = await client.get_inverter_realtime_grid(sn)
-            print(f"  Grid: {grid.get_power():.2f} kW, {grid.get_voltage():.1f} V")
-            
+            print(f"  Grid: {grid.get_power():.0f} W, {grid.get_voltage():.1f} V")
+
             input_data = await client.get_inverter_realtime_input(sn)
-            print(f"  Input: {input_data.get_power():.2f} kW, {input_data.get_voltage():.1f} V")
-            
+            print(f"  Input: {input_data.get_power():.0f} W, {input_data.get_voltage():.1f} V")
+
             output = await client.get_inverter_realtime_output(sn)
-            print(f"  Output: {output.get_power():.2f} kW, {output.get_voltage():.1f} V")
+            print(f"  Output: {output.get_power():.0f} W, {output.get_voltage():.1f} V")
 
 
 if __name__ == '__main__':
