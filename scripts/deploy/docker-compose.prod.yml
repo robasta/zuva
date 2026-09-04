@@ -1,46 +1,16 @@
 # Production stack, uploaded by hand to Portainer.
 #
-# Set these in the Portainer stack's environment section - the deploy fails with
-# the message below if any is missing, rather than silently starting with a
-# well-known secret:
-#   INFLUXDB_TOKEN, INFLUXDB_ADMIN_PASSWORD, ZUVA_API_KEY,
-#   SUNSYNK_USERNAME, SUNSYNK_PASSWORD
+# Set these three in the Portainer stack's environment section - the deploy
+# fails with the message below if any is missing, rather than silently starting
+# with a well-known secret:
+#   ZUVA_API_KEY, SUNSYNK_USERNAME, SUNSYNK_PASSWORD
 # Optional: ZUVA_VERSION (image tag), TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
-#   TIMEZONE, POLL_INTERVAL, INFLUXDB_RETENTION, the alert thresholds.
+#   TIMEZONE, POLL_INTERVAL, HISTORY_RETENTION_DAYS, the alert thresholds.
+#
+# Two containers, no database service: zuva-api keeps everything in one SQLite
+# file on the zuva_api_data volume, so that volume is the whole backup.
 services:
-  # InfluxDB for data storage
-  influxdb:
-    image: influxdb:2.7
-    container_name: sunsynk-influxdb
-    restart: unless-stopped
-    ports:
-      # Loopback only: this port serves the admin UI and the API for the token
-      # below. Reach it over an SSH tunnel, or set INFLUXDB_BIND=0.0.0.0 to
-      # publish it and put it behind a reverse proxy with TLS.
-      - "${INFLUXDB_BIND:-127.0.0.1}:8086:8086"
-    environment:
-      - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:?set INFLUXDB_ADMIN_PASSWORD in the stack environment}
-      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG:-sunsynk}
-      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-solar_data}
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:?set INFLUXDB_TOKEN in the stack environment}
-      # Telemetry is written every poll; without a retention period the volume
-      # grows until the host runs out of disk.
-      - DOCKER_INFLUXDB_INIT_RETENTION=${INFLUXDB_RETENTION:-90d}
-    volumes:
-      - influxdb_data:/var/lib/influxdb2
-      - influxdb_config:/etc/influxdb2
-    healthcheck:
-      test: ["CMD", "influx", "ping"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    networks:
-      - sunsynk-network
-
-  # Zuva API Service (Docker Hub image)
+  # Zuva API Service (Docker Hub image) - owns the only database
   zuva-api:
     image: robasta/zuva-api:${ZUVA_VERSION:-latest}
     platform: linux/amd64
@@ -54,10 +24,10 @@ services:
       # random string; the collector must send the same value.
       - ZUVA_API_KEY=${ZUVA_API_KEY:?set ZUVA_API_KEY in the stack environment}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
-      - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
-      - INFLUXDB_ORG=${INFLUXDB_ORG:-sunsynk}
-      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-solar_data}
+      # Alerts and readings are pruned in-process on a periodic sweep; without a
+      # retention window the SQLite file grows for as long as the stack runs.
+      # 0 keeps everything.
+      - HISTORY_RETENTION_DAYS=${HISTORY_RETENTION_DAYS:-90}
       # TZ for log timestamps, TIMEZONE for quiet-hours arithmetic. Containers
       # default to UTC, which shifts quiet hours by two hours in SAST.
       - TZ=${TIMEZONE:-Africa/Johannesburg}
@@ -68,12 +38,9 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      # User settings and rate-limit state (SQLite). Without this volume a
-      # redeploy forgets which chat to notify.
+      # Settings, rate-limit state, alert history and readings - one SQLite file.
+      # Without this volume a redeploy forgets which chat to notify.
       - zuva_api_data:/data
-    depends_on:
-      influxdb:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"]
       interval: 15s
@@ -93,12 +60,10 @@ services:
       - SUNSYNK_USERNAME=${SUNSYNK_USERNAME:?set SUNSYNK_USERNAME in the stack environment}
       - SUNSYNK_PASSWORD=${SUNSYNK_PASSWORD:?set SUNSYNK_PASSWORD in the stack environment}
       - LOG_LEVEL=${LOG_LEVEL:-WARN}
-      - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
-      - INFLUXDB_ORG=${INFLUXDB_ORG:-sunsynk}
-      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-solar_data}
+      # The collector stores nothing itself: alerts and telemetry both go here,
+      # which is why it needs no database credentials.
       - NOTIFICATION_API_URL=http://zuva-api:8001
-      # Must match zuva-api's ZUVA_API_KEY or every alert is rejected with 401.
+      # Must match zuva-api's ZUVA_API_KEY or every post is rejected with 401.
       - ZUVA_API_KEY=${ZUVA_API_KEY}
       - TZ=${TIMEZONE:-Africa/Johannesburg}
       - TIMEZONE=${TIMEZONE:-Africa/Johannesburg}
@@ -120,8 +85,6 @@ services:
       # Alert suppression state, so a redeploy does not re-send every alert.
       - collector_state:/data
     depends_on:
-      influxdb:
-        condition: service_healthy
       zuva-api:
         condition: service_healthy
     healthcheck:
@@ -140,7 +103,5 @@ networks:
     driver: bridge
 
 volumes:
-  influxdb_data:
-  influxdb_config:
   zuva_api_data:
   collector_state:

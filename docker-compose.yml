@@ -2,38 +2,7 @@
 # For the deployed stack see scripts/deploy/docker-compose.prod.yml, which pulls
 # published images and requires every secret to be supplied.
 services:
-  # InfluxDB for data storage
-  influxdb:
-    image: influxdb:2.7
-    container_name: sunsynk-influxdb
-    restart: unless-stopped
-    ports:
-      # Loopback only: port 8086 is the admin UI and API for the token below.
-      - "127.0.0.1:8086:8086"
-    environment:
-      - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      # Dev-only defaults. The production compose file has no fallbacks.
-      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:-sunsynk-admin-password}
-      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG:-sunsynk}
-      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-solar_data}
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:-sunsynk-token}
-      # Telemetry is written every poll; without a retention period the bucket
-      # grows forever.
-      - DOCKER_INFLUXDB_INIT_RETENTION=${INFLUXDB_RETENTION:-90d}
-    volumes:
-      - influxdb_data:/var/lib/influxdb2
-      - influxdb_config:/etc/influxdb2
-    healthcheck:
-      test: ["CMD", "influx", "ping"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    networks:
-      - sunsynk-network
-
-  # Zuva API Service
+  # Zuva API Service - owns the only database (SQLite on zuva_api_data)
   zuva-api:
     build:
       context: .
@@ -49,10 +18,8 @@ services:
       # the same value as X-API-Key. Dev default; set a real one anywhere else.
       - ZUVA_API_KEY=${ZUVA_API_KEY:-dev-local-key}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
-      - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-sunsynk-token}
-      - INFLUXDB_ORG=${INFLUXDB_ORG:-sunsynk}
-      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-solar_data}
+      # Alerts and readings are swept in-process; 0 keeps everything.
+      - HISTORY_RETENTION_DAYS=${HISTORY_RETENTION_DAYS:-90}
       # TZ for log timestamps, TIMEZONE for quiet-hours arithmetic.
       - TZ=${TIMEZONE:-Africa/Johannesburg}
       - TIMEZONE=${TIMEZONE:-Africa/Johannesburg}
@@ -60,11 +27,8 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - DEFAULT_USER_ID=${DEFAULT_USER_ID:-robasta}
     volumes:
-      # User settings and rate-limit state (SQLite).
+      # The one SQLite file: settings, rate-limit state, alert history, readings.
       - zuva_api_data:/data
-    depends_on:
-      influxdb:
-        condition: service_healthy
     networks:
       - sunsynk-network
 
@@ -79,12 +43,9 @@ services:
       - SUNSYNK_USERNAME=${SUNSYNK_USERNAME}
       - SUNSYNK_PASSWORD=${SUNSYNK_PASSWORD}
       - LOG_LEVEL=${LOG_LEVEL:-WARN}
-      - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-sunsynk-token}
-      - INFLUXDB_ORG=${INFLUXDB_ORG:-sunsynk}
-      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-solar_data}
+      # The collector stores nothing itself: alerts and telemetry both go here.
       - NOTIFICATION_API_URL=http://zuva-api:8001
-      # Must match zuva-api's ZUVA_API_KEY or every alert is rejected with 401.
+      # Must match zuva-api's ZUVA_API_KEY or every post is rejected with 401.
       - ZUVA_API_KEY=${ZUVA_API_KEY:-dev-local-key}
       - TZ=${TIMEZONE:-Africa/Johannesburg}
       - TIMEZONE=${TIMEZONE:-Africa/Johannesburg}
@@ -99,8 +60,6 @@ services:
       - GRID_VOLTAGE_THRESHOLD=${GRID_VOLTAGE_THRESHOLD:-50}
       - GRID_OUTAGE_COOLDOWN_MINUTES=${GRID_OUTAGE_COOLDOWN_MINUTES:-30}
     depends_on:
-      influxdb:
-        condition: service_healthy
       zuva-api:
         condition: service_healthy
     volumes:
@@ -116,7 +75,5 @@ networks:
     driver: bridge
 
 volumes:
-  influxdb_data:
-  influxdb_config:
   zuva_api_data:
   collector_state:
