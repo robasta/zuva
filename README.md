@@ -8,6 +8,8 @@ This repository holds two things: the notification system (documented first) and
 ## Features
 
 - 🔋 **Battery Monitoring**: Get alerts when battery levels are low or critical
+- ⏳ **Depletion Warnings**: A projection of when the battery will reach the low
+  threshold at the current rate, so an alert arrives while you can still act on it
 - ⚡ **Grid Status**: Notifications for grid outages and power restoration, with reminders while the outage lasts
 - 📊 **Consumption Tracking**: High energy consumption warnings, with a separate evening threshold
 - 📱 **Telegram Notifications**: Send notifications via Telegram bot
@@ -76,6 +78,8 @@ HIGH_CONSUMPTION_THRESHOLD_W=400      # Watts, outside the evening window
 EVENING_CONSUMPTION_THRESHOLD_W=900   # Watts, 18:00-22:00 local time
 POLL_INTERVAL=600                     # Check the inverter every 10 minutes
 GRID_OUTAGE_COOLDOWN_MINUTES=30       # Repeat the outage alert every 30 min (0 = once)
+BATTERY_DEPLETION_HORIZON_MINUTES=120 # Warn this far ahead of the low threshold (0 = off)
+BATTERY_DEPLETION_URGENT_MINUTES=60   # Inside this window the warning is CRITICAL
 
 # Timezone: containers are UTC by default, which shifts quiet hours and the
 # evening consumption window.
@@ -132,12 +136,25 @@ deleted by a periodic sweep inside the API.
 `POST /alert` answers 409 when the user has no settings (an alert with nowhere to
 go is a configuration error, not a success) and 502 when delivery fails.
 
+`battery_depletion` is the only category whose severity varies. It measures the
+rate of SoC decline over the last `BATTERY_SOC_WINDOW_MINUTES` and projects when
+`BATTERY_LOW_THRESHOLD` will be reached:
+
+> ⏳ Battery at 30.0% and falling 6.0%/hour. Reaches 20% at about 03:40 (in 1 h 40 m).
+
+Inside `BATTERY_DEPLETION_URGENT_MINUTES` it is sent as `critical`, which bypasses
+quiet hours; outside it, as `high`, which quiet hours will hold until morning.
+That split is intentional - the default quiet window (22:00-07:00) covers the
+whole overnight discharge, so tiering is what makes the difference between one
+useful message at 01:00 and two of which the first is silent anyway.
+
 ## Alert Categories
 
 | Category | Severity | Description |
 |----------|----------|-------------|
 | `battery_critical` | CRITICAL | Battery below critical threshold |
 | `battery_low` | HIGH | Battery below low threshold |
+| `battery_depletion` | HIGH / CRITICAL | Projected to reach the low threshold soon |
 | `grid_outage` | HIGH | Grid power lost |
 | `grid_restored` | MEDIUM | Grid power restored |
 | `high_consumption` | MEDIUM | Load exceeds threshold |
