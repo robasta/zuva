@@ -41,16 +41,28 @@ class Version:
         return None
 
     @staticmethod
+    def _version_from_git() -> str | None:
+        """Describe the checkout, or None when git or the history is unavailable.
+
+        Container builds install from a copy of the source without .git and
+        without a git binary, and fall back to SUNSYNK_API_CLIENT_VERSION.
+        """
+        try:
+            with subprocess.Popen(["git", "describe", "--always", "--tags"],
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE) as process:
+                stdout, _ = process.communicate()
+                last_tag = stdout.decode('ascii').strip()
+                if process.returncode != 0 or not last_tag:
+                    return None
+        except OSError:
+            return None
+        raw_version = last_tag.split('-g', maxsplit=1)[0].replace('-', '.') if '-g' in last_tag else last_tag
+        return Version._normalize_version(raw_version)
+
+    @staticmethod
     def generate() -> str:
-        version = None
-        with subprocess.Popen(["git", "describe", "--always", "--tags"],
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE) as process:
-            stdout, _ = process.communicate()
-            last_tag = stdout.decode('ascii').strip()
-            if process.returncode == 0 and last_tag:
-                raw_version = last_tag.split('-g', maxsplit=1)[0].replace('-', '.') if '-g' in last_tag else last_tag
-                version = Version._normalize_version(raw_version)
+        version = Version._version_from_git()
 
         if not version:
             version = (
