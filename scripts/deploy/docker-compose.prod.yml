@@ -1,3 +1,12 @@
+# Production stack, uploaded by hand to Portainer.
+#
+# Set these in the Portainer stack's environment section - the deploy fails with
+# the message below if any is missing, rather than silently starting with a
+# well-known secret:
+#   INFLUXDB_TOKEN, INFLUXDB_ADMIN_PASSWORD, ZUVA_API_KEY,
+#   SUNSYNK_USERNAME, SUNSYNK_PASSWORD
+# Optional: ZUVA_VERSION (image tag), TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+#   TIMEZONE, POLL_INTERVAL, INFLUXDB_RETENTION, the alert thresholds.
 services:
   # InfluxDB for data storage
   influxdb:
@@ -5,42 +14,66 @@ services:
     container_name: sunsynk-influxdb
     restart: unless-stopped
     ports:
-      - "8086:8086"
+      # Loopback only: this port serves the admin UI and the API for the token
+      # below. Reach it over an SSH tunnel, or set INFLUXDB_BIND=0.0.0.0 to
+      # publish it and put it behind a reverse proxy with TLS.
+      - "${INFLUXDB_BIND:-127.0.0.1}:8086:8086"
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=sunsynk-admin-password
-      - DOCKER_INFLUXDB_INIT_ORG=sunsynk
-      - DOCKER_INFLUXDB_INIT_BUCKET=solar_data
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=sunsynk-token
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:?set INFLUXDB_ADMIN_PASSWORD in the stack environment}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG:-sunsynk}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-solar_data}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:?set INFLUXDB_TOKEN in the stack environment}
+      # Telemetry is written every poll; without a retention period the volume
+      # grows until the host runs out of disk.
+      - DOCKER_INFLUXDB_INIT_RETENTION=${INFLUXDB_RETENTION:-90d}
     volumes:
       - influxdb_data:/var/lib/influxdb2
       - influxdb_config:/etc/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - sunsynk-network
 
   # Zuva API Service (Docker Hub image)
   zuva-api:
-    image: robasta/zuva-api:latest
+    image: robasta/zuva-api:${ZUVA_VERSION:-latest}
     platform: linux/amd64
     container_name: zuva-api
     restart: unless-stopped
-    command: ["sh", "-c", "uvicorn zuva_api.main:app --host 0.0.0.0 --port 8001 --log-level $${UVICORN_LOG_LEVEL:-warning}"]
-    ports:
-      - "8001:8001"
     environment:
       - API_PORT=8001
       - UVICORN_LOG_LEVEL=${UVICORN_LOG_LEVEL:-warning}
+      # These endpoints can redirect where alerts are delivered and can send
+      # messages, so the service refuses to start unauthenticated. Use a long
+      # random string; the collector must send the same value.
+      - ZUVA_API_KEY=${ZUVA_API_KEY:?set ZUVA_API_KEY in the stack environment}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
       - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=sunsynk-token
-      - INFLUXDB_ORG=sunsynk
-      - INFLUXDB_BUCKET=solar_data
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-sunsynk}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-solar_data}
+      # TZ for log timestamps, TIMEZONE for quiet-hours arithmetic. Containers
+      # default to UTC, which shifts quiet hours by two hours in SAST.
+      - TZ=${TIMEZONE:-Africa/Johannesburg}
+      - TIMEZONE=${TIMEZONE:-Africa/Johannesburg}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
-      - DEFAULT_USER_ID=${DEFAULT_USER_ID}
+      - DEFAULT_USER_ID=${DEFAULT_USER_ID:-robasta}
+    ports:
+      - "8001:8001"
+    volumes:
+      # User settings and rate-limit state (SQLite). Without this volume a
+      # redeploy forgets which chat to notify.
+      - zuva_api_data:/data
     depends_on:
       influxdb:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"]
       interval: 15s
@@ -52,29 +85,53 @@ services:
 
   # Alert Monitor Service (Docker Hub image)
   alert-monitor:
-    image: robasta/zuva:latest
+    image: robasta/zuva:${ZUVA_VERSION:-latest}
     platform: linux/amd64
     container_name: zuva
     restart: unless-stopped
     environment:
-      - SUNSYNK_USERNAME=${SUNSYNK_USERNAME}
-      - SUNSYNK_PASSWORD=${SUNSYNK_PASSWORD}
+      - SUNSYNK_USERNAME=${SUNSYNK_USERNAME:?set SUNSYNK_USERNAME in the stack environment}
+      - SUNSYNK_PASSWORD=${SUNSYNK_PASSWORD:?set SUNSYNK_PASSWORD in the stack environment}
       - LOG_LEVEL=${LOG_LEVEL:-WARN}
       - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=sunsynk-token
-      - INFLUXDB_ORG=sunsynk
-      - INFLUXDB_BUCKET=solar_data
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-sunsynk}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-solar_data}
       - NOTIFICATION_API_URL=http://zuva-api:8001
-      - DEFAULT_USER_ID=${DEFAULT_USER_ID}
+      # Must match zuva-api's ZUVA_API_KEY or every alert is rejected with 401.
+      - ZUVA_API_KEY=${ZUVA_API_KEY}
+      - TZ=${TIMEZONE:-Africa/Johannesburg}
+      - TIMEZONE=${TIMEZONE:-Africa/Johannesburg}
+      - DEFAULT_USER_ID=${DEFAULT_USER_ID:-robasta}
       - POLL_INTERVAL=${POLL_INTERVAL:-600}
       - BATTERY_LOW_THRESHOLD=${BATTERY_LOW_THRESHOLD:-20}
       - BATTERY_CRITICAL_THRESHOLD=${BATTERY_CRITICAL_THRESHOLD:-15}
-      - HIGH_CONSUMPTION_THRESHOLD=${HIGH_CONSUMPTION_THRESHOLD:-400}
+      # Thresholds are in watts; the _W suffix is the current name. The old
+      # HIGH_CONSUMPTION_THRESHOLD / EVENING_CONSUMPTION_THRESHOLD names still
+      # work but log a deprecation warning.
+      - HIGH_CONSUMPTION_THRESHOLD_W=${HIGH_CONSUMPTION_THRESHOLD_W:-400}
+      - EVENING_CONSUMPTION_THRESHOLD_W=${EVENING_CONSUMPTION_THRESHOLD_W:-900}
+      - GRID_OUTAGE_CONSECUTIVE_READINGS=${GRID_OUTAGE_CONSECUTIVE_READINGS:-3}
+      - GRID_VOLTAGE_THRESHOLD=${GRID_VOLTAGE_THRESHOLD:-50}
+      - GRID_OUTAGE_COOLDOWN_MINUTES=${GRID_OUTAGE_COOLDOWN_MINUTES:-30}
+      - LOGIN_RETRY_WAIT_SECONDS=${LOGIN_RETRY_WAIT_SECONDS:-900}
+      - AUTH_FAILURE_BACKOFF_SECONDS=${AUTH_FAILURE_BACKOFF_SECONDS:-21600}
+    volumes:
+      # Alert suppression state, so a redeploy does not re-send every alert.
+      - collector_state:/data
     depends_on:
       influxdb:
-        condition: service_started
+        condition: service_healthy
       zuva-api:
         condition: service_healthy
+    healthcheck:
+      # The monitor listens on no port. It touches a heartbeat file after each
+      # completed poll, so this catches a wedged poll loop in a live process.
+      test: ["CMD", "python", "-m", "collector.heartbeat"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     networks:
       - sunsynk-network
 
@@ -85,3 +142,5 @@ networks:
 volumes:
   influxdb_data:
   influxdb_config:
+  zuva_api_data:
+  collector_state:
