@@ -81,6 +81,22 @@ ALERT_CONFIG = {
     'GRID_OUTAGE_CONSECUTIVE_READINGS': int(os.getenv("GRID_OUTAGE_CONSECUTIVE_READINGS", "3")),
     'GRID_VOLTAGE_THRESHOLD': float(os.getenv("GRID_VOLTAGE_THRESHOLD", "50.0")),
     'GRID_OUTAGE_COOLDOWN_MINUTES': int(os.getenv("GRID_OUTAGE_COOLDOWN_MINUTES", "30")),
+    # Depletion projection. The horizon and the urgent window are the two worth
+    # tuning; the rest are noise floors. 0 for the horizon disables the check.
+    'BATTERY_DEPLETION_HORIZON_MINUTES': float(
+        os.getenv("BATTERY_DEPLETION_HORIZON_MINUTES", "120")
+    ),
+    'BATTERY_DEPLETION_URGENT_MINUTES': float(os.getenv("BATTERY_DEPLETION_URGENT_MINUTES", "60")),
+    'BATTERY_DEPLETION_CONSECUTIVE_READINGS': int(
+        os.getenv("BATTERY_DEPLETION_CONSECUTIVE_READINGS", "2")
+    ),
+    'BATTERY_SOC_WINDOW_MINUTES': float(os.getenv("BATTERY_SOC_WINDOW_MINUTES", "45")),
+    'BATTERY_DEPLETION_MIN_SPAN_MINUTES': float(
+        os.getenv("BATTERY_DEPLETION_MIN_SPAN_MINUTES", "20")
+    ),
+    'BATTERY_DEPLETION_MIN_RATE_PCT_PER_HOUR': float(
+        os.getenv("BATTERY_DEPLETION_MIN_RATE_PCT_PER_HOUR", "1.0")
+    ),
 }
 
 
@@ -234,7 +250,10 @@ class AlertOrchestrator:
             input_power_w=input_power_w,
         )
 
+        # Record before checking so both battery checks see this poll's SoC.
+        self.alerter.record_soc_sample(battery_soc)
         await self.alerter.check_battery_alerts(battery_soc)
+        await self.alerter.check_battery_depletion(battery_soc)
         await self.alerter.check_grid_alerts(grid_power_w, grid_voltage, grid_status)
         await self.alerter.check_consumption_alerts(load_power_w, local_now().time())
         heartbeat.touch()

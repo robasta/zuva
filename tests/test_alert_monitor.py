@@ -187,6 +187,7 @@ async def test_poll_once_writes_telemetry_and_checks_alerts(monkeypatch):
     orchestrator = make_orchestrator(monkeypatch)
     orchestrator.telemetry.write = AsyncMock()
     orchestrator.alerter.check_battery_alerts = AsyncMock()
+    orchestrator.alerter.check_battery_depletion = AsyncMock()
     orchestrator.alerter.check_grid_alerts = AsyncMock()
     orchestrator.alerter.check_consumption_alerts = AsyncMock()
 
@@ -201,8 +202,13 @@ async def test_poll_once_writes_telemetry_and_checks_alerts(monkeypatch):
     assert write_kwargs["input_power_w"] == 2.7
 
     orchestrator.alerter.check_battery_alerts.assert_awaited_once_with(45.0)
+    orchestrator.alerter.check_battery_depletion.assert_awaited_once_with(45.0)
     orchestrator.alerter.check_grid_alerts.assert_awaited_once_with(0.0, 40.0, 0)
     orchestrator.alerter.check_consumption_alerts.assert_awaited_once()
+
+    # The projection is only as good as the window, so the sample must be
+    # recorded before either battery check reads it.
+    assert [soc for _, soc in orchestrator.alerter.soc_samples] == [45.0]
 
 
 @pytest.mark.asyncio
@@ -210,6 +216,7 @@ async def test_poll_once_touches_the_heartbeat(monkeypatch):
     orchestrator = make_orchestrator(monkeypatch)
     orchestrator.telemetry.write = AsyncMock()
     orchestrator.alerter.check_battery_alerts = AsyncMock()
+    orchestrator.alerter.check_battery_depletion = AsyncMock()
     orchestrator.alerter.check_grid_alerts = AsyncMock()
     orchestrator.alerter.check_consumption_alerts = AsyncMock()
 
