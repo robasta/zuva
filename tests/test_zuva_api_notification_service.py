@@ -265,8 +265,12 @@ async def test_send_alert_below_min_severity_is_suppressed(service):
 
 
 @pytest.mark.asyncio
-async def test_send_alert_without_channels_fails_loudly(service):
+async def test_send_alert_without_channels_fails_loudly(service, monkeypatch):
     service.user_settings["u1"] = make_settings(enabled_channels=[])
+    # Default quiet hours are 22:00-07:00, and they are checked before the
+    # channel list: without this the assertion only holds when the suite happens
+    # to run during the day.
+    monkeypatch.setattr(service, "_is_quiet_hours", lambda _: False)
 
     result = await service.send_alert(make_alert(), "u1")
 
