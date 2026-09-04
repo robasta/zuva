@@ -44,6 +44,11 @@ def test_collector_login_failure_is_a_known_category():
     assert AlertCategory("sunsynk_login_failure") is AlertCategory.SUNSYNK_LOGIN_FAILURE
 
 
+def test_battery_depletion_is_a_known_category():
+    """The collector's projection alert must be representable, or POST /alert 422s."""
+    assert AlertCategory("battery_depletion") is AlertCategory.BATTERY_DEPLETION
+
+
 def test_severity_order_is_ascending():
     assert SEVERITY_ORDER == ["low", "medium", "high", "critical"]
 

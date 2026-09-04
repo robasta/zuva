@@ -32,6 +32,10 @@ SEVERITY_ORDER = [
 class AlertCategory(str, Enum):
     BATTERY_LOW = "battery_low"
     BATTERY_CRITICAL = "battery_critical"
+    # Projected to reach the low threshold soon. A category of its own rather
+    # than battery_low, so the forecast cannot consume the real alert's
+    # rate-limit window.
+    BATTERY_DEPLETION = "battery_depletion"
     GRID_OUTAGE = "grid_outage"
     GRID_RESTORED = "grid_restored"
     HIGH_CONSUMPTION = "high_consumption"
