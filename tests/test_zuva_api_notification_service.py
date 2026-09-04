@@ -202,9 +202,14 @@ def test_should_rate_limit_true_when_recent(service):
 
 
 def test_should_rate_limit_accepts_naive_stored_timestamps(service):
-    """Timestamps loaded from disk may be naive; comparing them must not raise."""
+    """Timestamps loaded from disk may be naive; comparing them must not raise.
+
+    A naive stamp is read as wall-clock time in TIMEZONE, so it has to be built
+    from local_now(), not datetime.now() - otherwise the test only passes on a
+    machine whose system timezone happens to match TIMEZONE.
+    """
     settings = make_settings(rate_limit_minutes=15)
-    settings.last_alert_times["grid_outage"] = datetime.now().replace(tzinfo=None)
+    settings.last_alert_times["grid_outage"] = local_now().replace(tzinfo=None)
 
     assert service._should_rate_limit(settings, "grid_outage") is True
 
