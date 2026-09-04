@@ -1,17 +1,15 @@
-import datetime
-
-from sunsynk.resource import Resource
+from sunsynk.resource import Resource, to_datetime
 
 
 class PvIv(Resource):
     """PV input voltage/current data model."""
-    
+
     def __init__(self, data):
-        self.id = data['id']
-        self.pv_no = data['pvNo']
-        self.vpv = data['vpv']
-        self.ipv = data['ipv']
-        self.ppv = data['ppv']
-        self.today_pv = data['todayPv']
-        self.sn = data['sn']
-        self.time = datetime.datetime.strptime(data['time'], "%Y-%m-%d %H:%M:%S")
+        self.id = data.get('id')
+        self.pv_no = data.get('pvNo')
+        self.vpv = data.get('vpv')
+        self.ipv = data.get('ipv')
+        self.ppv = data.get('ppv')
+        self.today_pv = data.get('todayPv')
+        self.sn = data.get('sn')
+        self.time = to_datetime(data.get('time'), "%Y-%m-%d %H:%M:%S")

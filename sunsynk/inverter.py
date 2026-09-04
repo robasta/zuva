@@ -1,6 +1,4 @@
-import datetime
-
-from sunsynk.resource import Resource
+from sunsynk.resource import Resource, to_datetime
 
 
 class InverterVersion(Resource):
@@ -38,16 +36,15 @@ class Inverter(Resource):
         self.type = data.get('type')
         self.comm_type_name = data.get('commTypeName')
         self.cust_code = data.get('custCode')
-        self.version = InverterVersion(data.get('version')) if 'version' in data.keys() else None
+        self.version = InverterVersion(data['version']) if data.get('version') else None
         self.model = data.get('model')
         self.equip_mode = data.get('equipMode')
         self.pac = data.get('pac')
         self.generated_today = data.get('etoday')
         self.generated_total = data.get('etotal')
-        self.updated_at = datetime.datetime\
-            .strptime(data.get('updateAt'), "%Y-%m-%dT%H:%M:%SZ") if 'updateAt' in data.keys() else None
+        self.updated_at = to_datetime(data.get('updateAt'), "%Y-%m-%dT%H:%M:%SZ")
         self.opened = data.get('opened')
-        self.plant = PlantSummary(data.get('plant')) if 'plant' in data.keys() else None
-        self.gateway = GatewayInfo(data.get('gatewayVO')) if 'gatewayVO' in data.keys() else None
+        self.plant = PlantSummary(data['plant']) if data.get('plant') else None
+        self.gateway = GatewayInfo(data['gatewayVO']) if data.get('gatewayVO') else None
         self.sunsynk_equip = data.get('sunsynkEquip')
         self.protocol_identifier = data.get('protocolIdentifier')
