@@ -1,47 +1,49 @@
+"""Public names of the sunsynk client, resolved lazily.
+
+``setup.py`` imports ``sunsynk.version_info`` - and therefore this module -
+before the runtime dependencies in requirements.txt are installed. Importing
+the client eagerly here would make a fresh ``pip install .`` fail on the
+missing aiohttp/cryptography imports, so each name is loaded on first access.
+"""
+from importlib import import_module
+from typing import TYPE_CHECKING
+
+_EXPORTS = {
+    'SunsynkClient': 'sunsynk.client',
+    'SunsynkApiError': 'sunsynk.client',
+    'SunsynkConnectionError': 'sunsynk.client',
+    'SunsynkTimeoutError': 'sunsynk.client',
+    'Battery': 'sunsynk.battery',
+    'Grid': 'sunsynk.grid',
+    'Input': 'sunsynk.input',
+    'Output': 'sunsynk.output',
+    'Inverter': 'sunsynk.inverter',
+    'Plant': 'sunsynk.plant',
+}
+
+if TYPE_CHECKING:  # Gives type checkers and linters the real definitions.
+    from sunsynk.battery import Battery
+    from sunsynk.client import (
+        SunsynkApiError,
+        SunsynkClient,
+        SunsynkConnectionError,
+        SunsynkTimeoutError,
+    )
+    from sunsynk.grid import Grid
+    from sunsynk.input import Input
+    from sunsynk.inverter import Inverter
+    from sunsynk.output import Output
+    from sunsynk.plant import Plant
+
+__all__ = list(_EXPORTS)
+
+
 def __getattr__(name):
-    """Lazy imports to avoid circular dependency during setup."""
-    if name == 'SunsynkClient':
-        from sunsynk.client import SunsynkClient
-        return SunsynkClient
-    elif name == 'SunsynkApiError':
-        from sunsynk.client import SunsynkApiError
-        return SunsynkApiError
-    elif name == 'SunsynkConnectionError':
-        from sunsynk.client import SunsynkConnectionError
-        return SunsynkConnectionError
-    elif name == 'SunsynkTimeoutError':
-        from sunsynk.client import SunsynkTimeoutError
-        return SunsynkTimeoutError
-    elif name == 'Battery':
-        from sunsynk.battery import Battery
-        return Battery
-    elif name == 'Grid':
-        from sunsynk.grid import Grid
-        return Grid
-    elif name == 'Input':
-        from sunsynk.input import Input
-        return Input
-    elif name == 'Output':
-        from sunsynk.output import Output
-        return Output
-    elif name == 'Inverter':
-        from sunsynk.inverter import Inverter
-        return Inverter
-    elif name == 'Plant':
-        from sunsynk.plant import Plant
-        return Plant
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+    return getattr(import_module(module_name), name)
 
-__all__ = [
-    'SunsynkClient',
-    'SunsynkApiError',
-    'SunsynkConnectionError',
-    'SunsynkTimeoutError',
-    'Battery',
-    'Grid',
-    'Input',
-    'Output',
-    'Inverter',
-    'Plant',
-]
 
+def __dir__():
+    return sorted(__all__)
