@@ -1,161 +1,142 @@
-# Findings: Learning Alarms From Historical Solar Usage Data
+# Proposal: Learning Alarm Thresholds From Historical Usage
+
+**Status: proposal, not implemented.** Nothing below exists in the code yet.
+
+Scope note: the product is notifications. There is no dashboard and no frontend
+app, so anything learned here has to arrive as a Telegram message or change which
+messages get sent - not as a chart for someone to read.
 
 ## 1) What exists today
 
-- The current alerting logic is rule-based with static thresholds and fixed time windows in `zuva/collector/alert_monitor.py`.
-- Existing consumption checks are currently hard-coded by time of day, for example:
-	- 18:00-22:00 uses a fixed evening threshold.
-	- 22:00-05:00 uses a fixed night threshold.
-- The notification service (`zuva_api/main.py`) already handles:
-	- severity filtering,
-	- quiet hours,
-	- rate-limiting,
-	- persistence of sent alerts.
+- Alerting is rule-based, with static thresholds and fixed time windows in
+  `zuva/collector/alert_logic.py`.
+- Consumption checks are hard-coded by time of day: silent 05:00-18:00, an
+  evening threshold 18:00-22:00, and a night threshold otherwise.
+- The notification service (`zuva_api/notification_service.py`) already handles
+  severity filtering, quiet hours, per-category rate limiting, and recording what
+  was sent.
+- Poll readings are stored: the collector posts each poll to `POST /telemetry`
+  and `zuva-api` writes a row to the `readings` table in `/data/zuva.db`
+  (`inverter_sn`, `plant_id`, `load_power_w`, `grid_power_w`, `battery_soc`,
+  `grid_voltage`, `grid_status`, `battery_power_w`, `battery_voltage`,
+  `input_power_w`, `recorded_at` as UTC ISO-8601).
 
-## 2) Important gap to solve first
+So the historical series this proposal needs already accumulates. Two caveats
+before relying on it:
 
-- In this repository, the usage/telemetry writes are not currently visible (alerts and user settings are persisted, but load usage writes are not shown).
-- To learn dynamic alarms, we need historical time series for at least:
-	- timestamp,
-	- load power (W or kW),
-	- inverter identifier,
-	- optional context (weekday/weekend, battery SOC, grid status).
+- `HISTORY_RETENTION_DAYS` defaults to 90, which is enough for an 8-week training
+  window but not much more. A longer window means raising it.
+- At the default `POLL_INTERVAL` of 600s there are ~144 rows per inverter per
+  day, so a `(weekday, hour)` slot gets ~6 samples per day of history.
 
-If usage data is already being written from another process/environment, we can start immediately using that bucket/measurement. If not, add telemetry writes in the collector first.
+## 2) Recommended approach: adaptive thresholds per time slot
 
-## 3) Recommended solution: Adaptive Alarm Engine
+Build a baseline profile per `(weekday, hour)` (or 30-minute bin) from the last
+6-8 weeks, then alert when a live reading is abnormal *for that slot* rather than
+against one global number.
 
-Use historical data to build a baseline profile by day-of-week and time window, then trigger alerts when live readings exceed learned expected ranges.
+### 2.1 Baseline model
 
-### 3.1 Baseline model (simple, robust)
+Per slot, over the training window:
 
-For each slot `(weekday, hour)` (or `(weekday, 30-minute bin)`):
-
-- Collect the last 6-8 weeks of readings.
-- Compute robust statistics:
-	- `p50` (median),
-	- `p90` (normal high bound),
-	- `mad` (median absolute deviation) for noise robustness.
-- Learn two thresholds per slot:
-	- warning threshold,
-	- critical threshold.
-
-Recommended formulas:
-
+- `p50` (median), `p90` (normal high bound), `mad` (median absolute deviation).
 - `warning = max(p90 * 1.15, p50 + 3 * mad)`
 - `critical = max(p90 * 1.35, p50 + 5 * mad)`
 
-Then clamp with safety limits:
+Then clamp: a floor so noise cannot alert, and a ceiling so a bad training window
+cannot silence everything.
 
-- minimum threshold floor to avoid tiny-noise alerts,
-- maximum threshold ceiling to avoid runaway values.
+Median/MAD rather than mean/stddev because a single grid outage or a pool pump
+left on overnight should not move the baseline.
 
-### 3.2 Live detection logic
+### 2.2 Live detection
 
-At runtime (inside monitor loop):
+Inside the poll loop:
 
-1. Determine current `(weekday, slot)`.
-2. Load the learned baseline thresholds for that slot.
-3. Compare current `load_power` to `warning` and `critical`.
-4. Require `N` consecutive breaches (for example `N=2` or `N=3`) before firing.
-5. Keep cooldown/rate limits (already supported by notification service).
+1. Determine the current `(weekday, slot)`.
+2. Load that slot's learned thresholds.
+3. Compare the current `load_power_w`.
+4. Require `N` consecutive breaches (2-3) before firing, as grid outages already
+   do.
+5. Leave rate limiting and quiet hours to `zuva-api` - they already work.
 
-This gives behavior like:
+Behaviour this produces: if weekday 04:00-05:00 has historically run at ~2.0 kW,
+that is learned as normal instead of tripping the night threshold every morning;
+if 16:00-18:00 normally sits at ~0.4 kW, a 0.7 kW reading there becomes worth a
+message.
 
-- If weekdays 04:00-05:00 are historically around 2.0 kW, the system learns that as expected and can notify only when abnormal relative to that slot.
-- If 16:00-18:00 are historically around 0.4 kW, the learned threshold might become around 0.5-0.7 kW, and alerts fire automatically above that range.
+## 3) Threshold tuning as a notification
 
-## 4) Auto-generated insights for alarm tuning
-
-Add a daily insights job (for example at 06:00) that summarizes:
+A daily job (say 06:00) summarises what it learned and sends it as one Telegram
+message under a new `insight_report` category - a digest the owner reads once a
+day, not a dashboard:
 
 - top high-usage slots by weekday,
 - recurring spikes (for example every weekday 04:00-05:00),
-- slots where current static alarms are too strict or too loose,
-- recommended threshold updates.
+- slots where the current static thresholds are too strict or too loose,
+- recommended threshold updates, with sample size and confidence.
 
-Output format should include confidence and sample size, for example:
+For example:
 
-- `weekday=Mon-Fri, slot=04:00-05:00, expected=2.0kW, warning=2.4kW, confidence=high (n=42 days)`
-- `weekday=Mon-Fri, slot=16:00-18:00, expected=0.4kW, warning=0.55kW, confidence=high (n=41 days)`
+- `Mon-Fri 04:00-05:00: expected 2.0kW, warning 2.4kW, confidence high (n=42 days)`
+- `Mon-Fri 16:00-18:00: expected 0.4kW, warning 0.55kW, confidence high (n=41 days)`
 
-This can be sent as:
+## 4) Storage additions
 
-- notification alert category (insight report),
-- and/or API endpoint for dashboard consumption.
+Two tables alongside the existing `readings`, in the same `/data/zuva.db`:
 
-## 5) Data model additions
+1. `alarm_profiles` - `inverter_sn`, `weekday`, `slot`, `p50`, `p90`, `mad`,
+   `warning_threshold`, `critical_threshold`, `sample_count`, `updated_at`;
+   primary key `(inverter_sn, weekday, slot)`.
+2. `alarm_events` - `inverter_sn`, `severity`, `weekday`, `slot`, `actual_w`,
+   `threshold_w`, `deviation_pct`, `profile_version`, `recorded_at`; the record of
+   why an adaptive alert fired, so a bad profile can be diagnosed after the fact.
 
-Recommended measurements/tables:
+Both need to be exempt from, or given a longer window than,
+`HISTORY_RETENTION_DAYS` - a profile is not telemetry.
 
-1. `usage_readings`
-- tags: `inverter_sn`, `plant_id`
-- fields: `load_power_kw`, `grid_power_kw`, `battery_soc`, `grid_voltage`
-- time: ingestion timestamp
+## 5) Integration plan
 
-2. `adaptive_alarm_profiles`
-- tags: `inverter_sn`, `weekday`, `slot`
-- fields: `p50`, `p90`, `mad`, `warning_threshold`, `critical_threshold`, `sample_count`, `updated_at`
+Profiles are computed where the data lives, which is `zuva_api`, not the
+collector. The collector reads them over the API it already authenticates to.
 
-3. `adaptive_alarm_events`
-- tags: `inverter_sn`, `severity`, `slot`, `weekday`
-- fields: `actual_kw`, `threshold_kw`, `deviation_pct`, `profile_version`
+### Phase 1: suggestion only
 
-## 6) Integration plan for this codebase
-
-### Phase 1: baseline and recommendations
-
-- Add a new module (example: `zuva/collector/adaptive_alarms.py`) to:
-	- query historical usage,
-	- compute per-slot thresholds,
-	- persist profiles,
-	- generate recommendation summaries.
-- Keep existing static checks as fallback.
+- Add `zuva_api/alarm_profiles.py`: query `readings`, compute per-slot
+  statistics, persist profiles, and produce the daily digest.
+- Expose `GET /alarm-profiles/{inverter_sn}` behind the existing `X-API-Key`.
+- Keep the static checks exactly as they are; only send the digest.
 
 ### Phase 2: runtime adaptive alerts
 
-- Extend `check_consumption_alerts` to:
-	- prefer adaptive thresholds when profile exists,
-	- fallback to static thresholds when profile missing.
-- Keep existing rate limiting and quiet-hour controls.
+- Extend `check_consumption_alerts` to prefer an adaptive threshold when a
+  profile exists for the current slot, and fall back to the static one when it
+  does not.
+- Cache profiles in the collector and refresh them daily; a poll must not depend
+  on a second HTTP call succeeding.
 
 ### Phase 3: confidence and safety
 
-- Only activate adaptive threshold for a slot when `sample_count >= min_samples` (for example 14-21 days).
-- Add anomaly confirmation using consecutive breaches.
-- Add a max alerts per slot/day guard.
+- Activate a slot only once `sample_count >= min_samples` (14-21 days).
+- Confirm with consecutive breaches.
+- Cap adaptive alerts per slot per day, so a broken profile cannot become a
+  message flood.
 
-## 7) Why this approach is a good fit
+## 6) Why this approach
 
-- It is explainable (easy to reason about and tune).
-- It is robust to outliers (median/MAD based).
-- It works with limited data and does not require heavy ML infrastructure.
-- It directly answers your requirement: auto-learn thresholds by weekday/time and trigger warnings without manually defining each alarm.
+- Explainable: a person can read the profile and see why an alert fired.
+- Robust to outliers, being median/MAD based.
+- Works with limited data and needs no ML infrastructure - the whole thing is
+  SQL plus `statistics` from the standard library.
+- It answers the actual requirement: learn what normal looks like per weekday and
+  time, without hand-defining every threshold.
 
-## 8) Next implementation details to lock in
-
-Before coding, decide:
+## 7) Decisions to lock in before coding
 
 1. Slot granularity: 60 min vs 30 min.
-2. Training window: 6 vs 8 weeks.
-3. Minimum confidence sample count.
-4. Whether adaptive alerts should use existing `high_consumption` category or a new category (for example `adaptive_consumption`).
-5. Whether to run in suggestion-only mode first, then auto-trigger mode.
-
-## 9) Minimal Flux query pattern (example)
-
-Use this pattern to fetch historical usage by slot:
-
-```flux
-from(bucket: "solar_data")
-	|> range(start: -8w)
-	|> filter(fn: (r) => r._measurement == "usage_readings")
-	|> filter(fn: (r) => r._field == "load_power_kw")
-	|> map(fn: (r) => ({
-			r with
-			weekday: string(v: date.weekDay(t: r._time)),
-			hour: date.hour(t: r._time)
-	}))
-```
-
-Then compute percentile and MAD per `(weekday, hour)` in Python, store results in `adaptive_alarm_profiles`, and read those profiles in the live monitor path.
+2. Training window: 6 vs 8 weeks - and whether to raise
+   `HISTORY_RETENTION_DAYS` to match.
+3. Minimum sample count for confidence.
+4. Reuse the `high_consumption` category or add `adaptive_consumption`
+   (a new category means editing the `AlertCategory` enum in `zuva_api/models.py`).
+5. How long to stay in suggestion-only mode before enabling auto-trigger.
