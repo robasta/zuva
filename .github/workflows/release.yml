@@ -58,6 +58,9 @@ jobs:
         file: zuva/collector/Dockerfile
         platforms: linux/amd64
         push: true
+        # The image no longer contains .git, so the version is passed in.
+        build-args: |
+          SUNSYNK_API_CLIENT_VERSION=${{ steps.tags.outputs.version_tag }}
         tags: |
           ${{ env.DOCKERHUB_NAMESPACE }}/zuva:latest
           ${{ env.DOCKERHUB_NAMESPACE }}/zuva:${{ steps.tags.outputs.version_tag }}

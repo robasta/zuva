@@ -1,20 +1,11 @@
-# Core dependencies from parent project
+# Runtime dependencies of the collector image. Anything not imported by
+# zuva/collector or sunsynk stays out: every extra wheel is image size and
+# vulnerability surface for a process that only polls an API and writes points.
 aiohttp==3.9.1
-influxdb-client==1.38.0
-python-dotenv==1.0.0
-asyncio-mqtt==0.16.1
-
-# Data processing and analysis
-pandas==2.0.3
-numpy==1.24.3
-
-# Configuration and environment
-pyyaml==6.0.1
-
-# Logging and monitoring
-structlog==23.1.0
-
-# Utilities
-python-dateutil==2.8.2
-pytz==2023.3
 cryptography==41.0.7
+influxdb-client==1.38.0
+
+# zoneinfo needs a tz database, which slim images do not ship. Without this
+# TIMEZONE=Africa/Johannesburg falls back to UTC and the evening-consumption
+# window fires two hours early.
+tzdata==2023.4

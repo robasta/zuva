@@ -39,6 +39,8 @@ jobs:
         file: zuva/collector/Dockerfile
         platforms: linux/amd64
         push: false
+        build-args: |
+          SUNSYNK_API_CLIENT_VERSION=${{ github.sha }}
 
     - name: Build zuva-api image
       uses: docker/build-push-action@v6

@@ -160,7 +160,8 @@ Thumbs.db
 .vscode/
 
 # Docker
-.dockerignore
+# .dockerignore is intentionally tracked: the image builds depend on it to keep
+# .git, venv/ and the stale generated sunsynk/version.py out of the context.
 
 # OS generated files
 .DS_Store

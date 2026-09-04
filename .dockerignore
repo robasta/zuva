@@ -1,0 +1,26 @@
+# Keeps the build context small and keeps secrets out of it entirely: nothing
+# here can end up in an image layer by accident.
+.env
+.env.*
+*.env
+venv/
+.git/
+.github/
+.pytest_cache/
+.coverage
+htmlcov/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+tests/
+scripts/
+docker-compose*.yml
+*.md
+.DS_Store
+.vscode/
+
+# Generated, and whatever is committed is stale. Leaving it out lets setup.py
+# stamp the SUNSYNK_API_CLIENT_VERSION build arg into the image instead.
+sunsynk/version.py
