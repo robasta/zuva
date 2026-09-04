@@ -14,7 +14,6 @@ pylint==3.0.3
 # Imported by the collector and API tests. python-telegram-bot is deliberately
 # absent: notification_service falls back to a stub when it is missing, and the
 # tests inject their own bot object.
-influxdb-client==1.38.0
 fastapi==0.104.1
 pydantic==2.5.0
 httpx==0.25.2

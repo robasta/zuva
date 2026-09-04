@@ -12,7 +12,7 @@ if [ ! -x ./venv/bin/python ]; then
 fi
 
 # One check for the whole dev set instead of a chain of per-package installs.
-if ! ./venv/bin/python -c "import pytest, pytest_asyncio, pytest_cov, influxdb_client, fastapi, pydantic, httpx" >/dev/null 2>&1; then
+if ! ./venv/bin/python -c "import pytest, pytest_asyncio, pytest_cov, fastapi, pydantic, httpx" >/dev/null 2>&1; then
   ./venv/bin/pip install -q -r requirements-dev.txt
 fi
 
