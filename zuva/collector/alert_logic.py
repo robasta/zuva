@@ -26,6 +26,15 @@ DEFAULTS = {
     'DAYTIME_START_HOUR': 5,
     'DAYTIME_END_HOUR': 18,
     'EVENING_END_HOUR': 22,
+    # Depletion projection. 0 minutes of horizon disables the check entirely.
+    'BATTERY_DEPLETION_HORIZON_MINUTES': 120,
+    'BATTERY_DEPLETION_URGENT_MINUTES': 60,
+    'BATTERY_DEPLETION_CONSECUTIVE_READINGS': 2,
+    # Wide enough that a late poll cannot starve the window below the minimum
+    # span: at the default 600s interval this holds four or five samples.
+    'BATTERY_SOC_WINDOW_MINUTES': 45,
+    'BATTERY_DEPLETION_MIN_SPAN_MINUTES': 20,
+    'BATTERY_DEPLETION_MIN_RATE_PCT_PER_HOUR': 1.0,
 }
 
 STATE_KEYS = (
@@ -35,7 +44,22 @@ STATE_KEYS = (
     'grid_restore_consecutive_count',
     'grid_outage_blocked',
     'last_grid_outage_alert_at',
+    'soc_samples',
+    'last_depletion_alert',
+    'depletion_consecutive_count',
 )
+
+# Depletion alerts escalate and never step back down within one episode.
+DEPLETION_STAGES = {'warning': 1, 'urgent': 2}
+
+
+def format_duration(minutes):
+    """Render minutes the way a phone notification should read it."""
+    total = int(round(minutes))
+    if total < 60:
+        return f"{total} min"
+    hours, remainder = divmod(total, 60)
+    return f"{hours} h" if remainder == 0 else f"{hours} h {remainder} m"
 
 
 class AlertEvaluator:
@@ -50,6 +74,9 @@ class AlertEvaluator:
         self.grid_restore_consecutive_count = 0
         self.grid_outage_blocked = False
         self.last_grid_outage_alert_at = None
+        self.soc_samples = []
+        self.last_depletion_alert = None
+        self.depletion_consecutive_count = 0
         if self.state_store is not None:
             self._load_state()
 
@@ -65,6 +92,11 @@ class AlertEvaluator:
             if key in state:
                 setattr(self, key, state[key])
         self.last_grid_outage_alert_at = self._parse_timestamp(self.last_grid_outage_alert_at)
+        # Carrying the SoC window across a restart is the point: rebuilding it
+        # from scratch blinds the projection for the whole warm-up span, which
+        # is exactly when a restart is most likely (a power cut).
+        self.soc_samples = self._parse_soc_samples(self.soc_samples)
+        self._prune_soc_samples()
 
     def _save_state(self):
         if self.state_store is None:
@@ -72,7 +104,25 @@ class AlertEvaluator:
         state = {key: getattr(self, key) for key in STATE_KEYS}
         if isinstance(state['last_grid_outage_alert_at'], datetime):
             state['last_grid_outage_alert_at'] = state['last_grid_outage_alert_at'].isoformat()
+        state['soc_samples'] = [[at.isoformat(), soc] for at, soc in state['soc_samples']]
         self.state_store.save(state)
+
+    def _parse_soc_samples(self, value):
+        """Rebuild the SoC window from stored JSON, dropping anything unusable."""
+        if not isinstance(value, (list, tuple)):
+            return []
+        samples = []
+        for entry in value:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                continue
+            at = self._parse_timestamp(entry[0])
+            if at is None:
+                continue
+            try:
+                samples.append((at, float(entry[1])))
+            except (TypeError, ValueError):
+                continue
+        return samples
 
     @staticmethod
     def _parse_timestamp(value):
@@ -86,6 +136,72 @@ class AlertEvaluator:
             parsed = parsed.replace(tzinfo=get_timezone())
         return parsed
 
+    # -- discharge rate ----------------------------------------------------
+
+    def record_soc_sample(self, battery_soc, at=None):
+        """Add one SoC observation to the rolling window used for projections."""
+        if battery_soc is None:
+            return
+        at = at or local_now()
+        self.soc_samples.append((at, float(battery_soc)))
+        self._prune_soc_samples(now=at)
+        self._save_state()
+
+    def _prune_soc_samples(self, now=None):
+        window = timedelta(minutes=float(self._setting('BATTERY_SOC_WINDOW_MINUTES')))
+        cutoff = (now or local_now()) - window
+        self.soc_samples = [
+            (at, soc) for at, soc in sorted(self.soc_samples, key=lambda s: s[0]) if at >= cutoff
+        ]
+
+    def soc_discharge_rate(self):
+        """Observed discharge over the window in %/hour, or ``None``.
+
+        A SoC slope needs no battery capacity figure and makes no assumption
+        about the sign of the reported battery power, and it self-calibrates as
+        the pack ages. It is also already net of solar: a battery being topped
+        up by the sun simply has no discharge rate.
+
+        ``None`` means "do not project": charging, flat, or a window too narrow
+        for the drop to be more than SoC reporting granularity.
+        """
+        if len(self.soc_samples) < 2:
+            return None
+        oldest_at, oldest_soc = self.soc_samples[0]
+        newest_at, newest_soc = self.soc_samples[-1]
+        span_minutes = (newest_at - oldest_at).total_seconds() / 60
+        if span_minutes < float(self._setting('BATTERY_DEPLETION_MIN_SPAN_MINUTES')):
+            return None
+        rate = (oldest_soc - newest_soc) / (span_minutes / 60)
+        # A near-zero rate divides out into an absurd horizon, so the floor is
+        # what keeps "reaches 20% in 400 hours" out of the projections.
+        if rate < float(self._setting('BATTERY_DEPLETION_MIN_RATE_PCT_PER_HOUR')):
+            return None
+        return rate
+
+    def project_minutes_to(self, battery_soc, target_soc):
+        """Minutes until ``battery_soc`` falls to ``target_soc``, or ``None``."""
+        rate = self.soc_discharge_rate()
+        if rate is None or battery_soc is None or battery_soc <= target_soc:
+            return None
+        return (battery_soc - target_soc) / rate * 60
+
+    def _projection_clause(self, battery_soc, target_soc, label):
+        """A time-to-``label`` sentence for the fixed-threshold alerts.
+
+        Returns ``("", {})`` when there is no usable rate, so those messages stay
+        exactly as they were before projections existed.
+        """
+        minutes = self.project_minutes_to(battery_soc, target_soc)
+        if minutes is None:
+            return "", {}
+        rate = self.soc_discharge_rate()
+        clause = f" About {format_duration(minutes)} to {label} at the current {rate:.1f}%/hour."
+        return clause, {
+            "discharge_rate_pct_per_hour": round(rate, 2),
+            "minutes_to_next_threshold": round(minutes),
+        }
+
     # -- battery -----------------------------------------------------------
 
     async def check_battery_alerts(self, battery_soc):
@@ -95,12 +211,16 @@ class AlertEvaluator:
 
         if battery_soc <= critical:
             if self.last_battery_alert != "critical":
+                clause, projection = self._projection_clause(battery_soc, 0, "empty")
                 await self.notification_sender.send(
                     category="battery_critical",
                     severity="critical",
                     title="🚨 Critical Battery Level",
-                    message=f"Battery is critically low at {battery_soc:.1f}%. Immediate attention required!",
-                    metadata={"battery_soc": battery_soc}
+                    message=(
+                        f"Battery is critically low at {battery_soc:.1f}%. "
+                        f"Immediate attention required!{clause}"
+                    ),
+                    metadata={"battery_soc": battery_soc, **projection}
                 )
                 self.last_battery_alert = "critical"
                 self._save_state()
@@ -108,12 +228,16 @@ class AlertEvaluator:
             # Only escalate upward: recovering from critical into the low band is
             # good news and must not raise a fresh alert.
             if self.last_battery_alert is None:
+                clause, projection = self._projection_clause(battery_soc, critical, "critical")
                 await self.notification_sender.send(
                     category="battery_low",
                     severity="high",
                     title="⚠️ Low Battery Level",
-                    message=f"Battery is low at {battery_soc:.1f}%. Consider conserving energy.",
-                    metadata={"battery_soc": battery_soc}
+                    message=(
+                        f"Battery is low at {battery_soc:.1f}%. "
+                        f"Consider conserving energy.{clause}"
+                    ),
+                    metadata={"battery_soc": battery_soc, **projection}
                 )
                 self.last_battery_alert = "low"
                 self._save_state()
@@ -121,6 +245,67 @@ class AlertEvaluator:
             if self.last_battery_alert is not None:
                 self.last_battery_alert = None
                 self._save_state()
+
+    async def check_battery_depletion(self, battery_soc):
+        """Warn *before* the battery reaches the low threshold, not when it does.
+
+        Fires at most twice per discharge episode: once at ``high`` when the
+        projection enters the horizon, then once at ``critical`` when it enters
+        the urgent window.
+        """
+        horizon = float(self._setting('BATTERY_DEPLETION_HORIZON_MINUTES'))
+        reserve = float(self._setting('BATTERY_LOW_THRESHOLD'))
+        minutes = None if horizon <= 0 else self.project_minutes_to(battery_soc, reserve)
+
+        if minutes is None or minutes > horizon:
+            # Nothing to forecast: charging, flat, still warming up, the check is
+            # disabled, or already at/below the reserve - where battery_low owns
+            # the message and a forecast of the present would just be noise.
+            if self.last_depletion_alert is not None or self.depletion_consecutive_count:
+                self.last_depletion_alert = None
+                self.depletion_consecutive_count = 0
+                self._save_state()
+            return
+
+        self.depletion_consecutive_count += 1
+        if self.depletion_consecutive_count < int(
+            self._setting('BATTERY_DEPLETION_CONSECUTIVE_READINGS')
+        ):
+            self._save_state()
+            return
+
+        urgent = minutes <= float(self._setting('BATTERY_DEPLETION_URGENT_MINUTES'))
+        stage = 'urgent' if urgent else 'warning'
+        if DEPLETION_STAGES[stage] <= DEPLETION_STAGES.get(self.last_depletion_alert, 0):
+            return
+
+        rate = self.soc_discharge_rate()
+        eta = local_now() + timedelta(minutes=minutes)
+        # The severity split is deliberate. zuva-api suppresses anything below
+        # critical during quiet hours, which default to 22:00-07:00 and so cover
+        # the entire overnight discharge window: a long-horizon warning raised at
+        # 23:00 is silent on purpose, and only the urgent one wakes anybody.
+        # Forcing critical here would trade one useful message for two.
+        await self.notification_sender.send(
+            category="battery_depletion",
+            severity="critical" if urgent else "high",
+            title="🚨 Battery Running Out" if urgent else "⏳ Battery Running Down",
+            message=(
+                f"Battery at {battery_soc:.1f}% and falling {rate:.1f}%/hour. "
+                f"Reaches {reserve:.0f}% at about {eta.strftime('%H:%M')} "
+                f"(in {format_duration(minutes)})."
+            ),
+            metadata={
+                "battery_soc": battery_soc,
+                "discharge_rate_pct_per_hour": round(rate, 2),
+                "reserve_soc": reserve,
+                "minutes_to_reserve": round(minutes),
+                "projected_at": eta.isoformat(),
+                "consecutive_readings": self.depletion_consecutive_count,
+            },
+        )
+        self.last_depletion_alert = stage
+        self._save_state()
 
     # -- grid --------------------------------------------------------------
 

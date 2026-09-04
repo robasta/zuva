@@ -91,6 +91,219 @@ async def test_battery_rearms_only_after_recovery_margin():
     sender.send.assert_awaited_once()
 
 
+def feed_discharge(evaluator, readings):
+    """Replay ``(minutes_ago, soc)`` samples onto the rolling SoC window.
+
+    Timestamps come off local_now() because the runners are UTC while TIMEZONE
+    defaults to Africa/Johannesburg; a naive datetime.now() would be two hours
+    out of step with the production code under test.
+    """
+    now = local_now()
+    for minutes_ago, soc in readings:
+        evaluator.record_soc_sample(soc, at=now - timedelta(minutes=minutes_ago))
+
+
+@pytest.mark.asyncio
+async def test_depletion_is_silent_until_the_window_is_wide_enough():
+    """A cold start has no slope, so it must not guess at one."""
+    evaluator, sender = make_evaluator()
+    feed_discharge(evaluator, [(10, 40.0), (0, 36.0)])
+
+    assert evaluator.soc_discharge_rate() is None
+    await evaluator.check_battery_depletion(36.0)
+
+    sender.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_depletion_warns_before_the_low_threshold():
+    evaluator, sender = make_evaluator(BATTERY_DEPLETION_CONSECUTIVE_READINGS=1)
+    # 6%/hour from 30% leaves 10 points to the 20% reserve: 100 minutes, inside
+    # the 120-minute horizon but outside the 60-minute urgent window.
+    feed_discharge(evaluator, [(30, 33.0), (15, 31.5), (0, 30.0)])
+
+    await evaluator.check_battery_depletion(30.0)
+
+    sender.send.assert_awaited_once()
+    _, kwargs = sender.send.await_args
+    assert kwargs['category'] == 'battery_depletion'
+    assert kwargs['severity'] == 'high'
+    assert kwargs['metadata']['reserve_soc'] == 20
+    assert kwargs['metadata']['discharge_rate_pct_per_hour'] == 6.0
+    assert kwargs['metadata']['minutes_to_reserve'] == 100
+    assert '20%' in kwargs['message']
+
+
+@pytest.mark.asyncio
+async def test_depletion_requires_consecutive_readings():
+    """One steep reading is not an episode; two in a row are."""
+    evaluator, sender = make_evaluator()
+    feed_discharge(evaluator, [(30, 33.0), (15, 31.5), (0, 30.0)])
+
+    await evaluator.check_battery_depletion(30.0)
+    sender.send.assert_not_awaited()
+
+    await evaluator.check_battery_depletion(30.0)
+    sender.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_depletion_escalates_to_critical_then_stays_quiet():
+    evaluator, sender = make_evaluator(BATTERY_DEPLETION_CONSECUTIVE_READINGS=1)
+    feed_discharge(evaluator, [(30, 33.0), (15, 31.5), (0, 30.0)])
+    await evaluator.check_battery_depletion(30.0)
+    sender.send.reset_mock()
+
+    # 25% at the same 6%/hour is 50 minutes from the reserve: inside the urgent
+    # window, so this escalates even though a warning already went out.
+    await evaluator.check_battery_depletion(25.0)
+
+    sender.send.assert_awaited_once()
+    _, kwargs = sender.send.await_args
+    assert kwargs['severity'] == 'critical'
+    assert evaluator.last_depletion_alert == 'urgent'
+
+    sender.send.reset_mock()
+    for _ in range(5):
+        await evaluator.check_battery_depletion(24.0)
+    sender.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_depletion_does_not_step_back_down_to_a_warning():
+    evaluator, sender = make_evaluator(BATTERY_DEPLETION_CONSECUTIVE_READINGS=1)
+    feed_discharge(evaluator, [(30, 31.0), (15, 29.5), (0, 28.0)])
+    await evaluator.check_battery_depletion(24.0)
+    assert evaluator.last_depletion_alert == 'urgent'
+    sender.send.reset_mock()
+
+    # A later reading projecting further out must not re-announce the warning.
+    await evaluator.check_battery_depletion(30.0)
+
+    sender.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_depletion_is_silent_while_charging():
+    evaluator, sender = make_evaluator(BATTERY_DEPLETION_CONSECUTIVE_READINGS=1)
+    feed_discharge(evaluator, [(30, 34.0), (15, 37.0), (0, 40.0)])
+
+    assert evaluator.soc_discharge_rate() is None
+    await evaluator.check_battery_depletion(40.0)
+
+    sender.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_depletion_ignores_a_rate_below_the_noise_floor():
+    """A flat SoC divides out into an absurd horizon, so it must not project."""
+    evaluator, sender = make_evaluator(BATTERY_DEPLETION_CONSECUTIVE_READINGS=1)
+    feed_discharge(evaluator, [(30, 34.2), (15, 34.1), (0, 34.0)])
+
+    assert evaluator.soc_discharge_rate() is None
+    await evaluator.check_battery_depletion(34.0)
+
+    sender.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_depletion_defers_to_battery_low_below_the_reserve():
+    evaluator, sender = make_evaluator(BATTERY_DEPLETION_CONSECUTIVE_READINGS=1)
+    feed_discharge(evaluator, [(30, 22.0), (15, 20.5), (0, 19.0)])
+
+    await evaluator.check_battery_depletion(19.0)
+
+    sender.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_depletion_re_arms_once_the_discharge_stops():
+    evaluator, sender = make_evaluator(BATTERY_DEPLETION_CONSECUTIVE_READINGS=1)
+    feed_discharge(evaluator, [(30, 33.0), (15, 31.5), (0, 30.0)])
+    await evaluator.check_battery_depletion(30.0)
+    assert evaluator.last_depletion_alert == 'warning'
+
+    # Solar comes up and the pack recharges: the window now slopes the other way.
+    evaluator.soc_samples = []
+    feed_discharge(evaluator, [(25, 40.0), (0, 45.0)])
+    await evaluator.check_battery_depletion(45.0)
+
+    assert evaluator.last_depletion_alert is None
+    assert evaluator.depletion_consecutive_count == 0
+
+
+@pytest.mark.asyncio
+async def test_depletion_can_be_disabled_with_a_zero_horizon():
+    evaluator, sender = make_evaluator(
+        BATTERY_DEPLETION_CONSECUTIVE_READINGS=1,
+        BATTERY_DEPLETION_HORIZON_MINUTES=0,
+    )
+    feed_discharge(evaluator, [(30, 37.0), (15, 35.5), (0, 34.0)])
+
+    await evaluator.check_battery_depletion(34.0)
+
+    sender.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_battery_low_gains_a_time_to_critical_clause():
+    evaluator, sender = make_evaluator()
+    feed_discharge(evaluator, [(30, 21.0), (15, 19.5), (0, 18.0)])
+
+    await evaluator.check_battery_alerts(18.0)
+
+    _, kwargs = sender.send.await_args
+    assert 'to critical at the current 6.0%/hour' in kwargs['message']
+    assert kwargs['metadata']['minutes_to_next_threshold'] == 80
+
+
+@pytest.mark.asyncio
+async def test_battery_alerts_are_unchanged_without_a_rate():
+    """No slope yet means the original message text, byte for byte."""
+    evaluator, sender = make_evaluator()
+
+    await evaluator.check_battery_alerts(15.0)
+
+    _, kwargs = sender.send.await_args
+    assert kwargs['message'] == "Battery is low at 15.0%. Consider conserving energy."
+    assert kwargs['metadata'] == {"battery_soc": 15.0}
+
+
+@pytest.mark.asyncio
+async def test_the_soc_window_survives_a_restart(tmp_path):
+    """Rebuilding the window from scratch would blind the projection for 20 min."""
+    path = str(tmp_path / "state.json")
+    evaluator = AlertEvaluator(make_config(), AsyncMock(), state_store=StateStore(path))
+    feed_discharge(evaluator, [(30, 37.0), (15, 35.5), (0, 34.0)])
+    evaluator.record_soc_sample(34.0)
+
+    restarted = AlertEvaluator(make_config(), AsyncMock(), state_store=StateStore(path))
+
+    assert len(restarted.soc_samples) == len(evaluator.soc_samples)
+    assert all(at.tzinfo is not None for at, _ in restarted.soc_samples)
+    assert restarted.soc_discharge_rate() == pytest.approx(6.0, abs=0.1)
+
+
+def test_stale_and_malformed_soc_samples_are_dropped_on_load(tmp_path):
+    path = str(tmp_path / "state.json")
+    stale = (local_now() - timedelta(hours=4)).isoformat()
+    fresh = (local_now() - timedelta(minutes=5)).isoformat()
+    StateStore(path).save({
+        "soc_samples": [
+            [stale, 90.0],
+            ["not-a-timestamp", 50.0],
+            [fresh],
+            [fresh, "not-a-number"],
+            "garbage",
+            [fresh, 34.0],
+        ]
+    })
+
+    evaluator = AlertEvaluator(make_config(), AsyncMock(), state_store=StateStore(path))
+
+    assert [soc for _, soc in evaluator.soc_samples] == [34.0]
+
+
 @pytest.mark.asyncio
 async def test_grid_outage_and_restore():
     evaluator, sender = make_evaluator(GRID_OUTAGE_CONSECUTIVE_READINGS=2)
