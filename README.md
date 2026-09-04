@@ -2,11 +2,14 @@
 
 A lightweight notification system for Sunsynk solar inverters that sends alerts via Telegram when important events occur.
 
+This repository holds two things: the notification system (documented first) and the
+[`sunsynk` API client library](#sunsynk-api-client-library) it is built on.
+
 ## Features
 
 - 🔋 **Battery Monitoring**: Get alerts when battery levels are low or critical
-- ⚡ **Grid Status**: Notifications for grid outages and power restoration  
-- 📊 **Consumption Tracking**: High energy consumption warnings
+- ⚡ **Grid Status**: Notifications for grid outages and power restoration, with reminders while the outage lasts
+- 📊 **Consumption Tracking**: High energy consumption warnings, with a separate evening threshold
 - 📱 **Telegram Notifications**: Send notifications via Telegram bot
 - ⏰ **Smart Filtering**: Quiet hours, rate limiting, and severity thresholds
 - 🎯 **Simple Setup**: Docker-based deployment with minimal configuration
@@ -24,13 +27,20 @@ A lightweight notification system for Sunsynk solar inverters that sends alerts 
 1. Clone the repository:
 ```bash
 git clone https://github.com/yourusername/sunsynk-api-client.git
-cd sunsynk-api-client/zuva
+cd sunsynk-api-client
 ```
 
-2. Create environment file:
+2. Create the environment file at the repository root (next to `docker-compose.yml`):
 ```bash
-cp .env.template .env
+cp zuva/.env.template .env
 # Edit .env with your credentials
+```
+
+   At a minimum set `SUNSYNK_USERNAME`, `SUNSYNK_PASSWORD`, `INFLUXDB_TOKEN`,
+   `INFLUXDB_ADMIN_PASSWORD` and `ZUVA_API_KEY`. The notification API refuses to
+   start without `ZUVA_API_KEY`, and the collector must send the same value:
+```bash
+openssl rand -hex 32   # use the output as ZUVA_API_KEY
 ```
 
 3. Configure your notification channels:
@@ -44,19 +54,32 @@ cp .env.template .env
 
 4. Start the system:
 ```bash
-docker compose --env-file .env -f ../docker-compose.yml up -d
+docker compose up -d --build
+# or, with the same checks and a summary: ./zuva/start.sh
 ```
+
+Deploying to a server (Portainer) uses
+[`scripts/deploy/docker-compose.prod.yml`](scripts/deploy/docker-compose.prod.yml),
+which pulls published images instead of building. It fails the deploy with an
+explicit message if any required secret is missing from the stack environment.
 
 ## Configuration
 
-Edit the `.env` file to customize:
+Every variable the services read is listed in [`zuva/.env.template`](zuva/.env.template).
+The ones you are most likely to change:
 
 ```bash
-# Alert Thresholds
-BATTERY_LOW_THRESHOLD=20        # Alert when battery below 20%
-BATTERY_CRITICAL_THRESHOLD=10   # Critical alert below 10%
-HIGH_CONSUMPTION_THRESHOLD=5    # Alert when load exceeds 5 kW
-POLL_INTERVAL=60               # Check inverter every 60 seconds
+# Alert thresholds
+BATTERY_LOW_THRESHOLD=20              # Alert when battery below 20%
+BATTERY_CRITICAL_THRESHOLD=15         # Critical alert below 15%
+HIGH_CONSUMPTION_THRESHOLD_W=400      # Watts, outside the evening window
+EVENING_CONSUMPTION_THRESHOLD_W=900   # Watts, 18:00-22:00 local time
+POLL_INTERVAL=600                     # Check the inverter every 10 minutes
+GRID_OUTAGE_COOLDOWN_MINUTES=30       # Repeat the outage alert every 30 min (0 = once)
+
+# Timezone: containers are UTC by default, which shifts quiet hours and the
+# evening consumption window.
+TIMEZONE=Africa/Johannesburg
 
 # Sunsynk network resilience
 SUNSYNK_REQUEST_TIMEOUT_SECONDS=20
@@ -65,13 +88,18 @@ SUNSYNK_MAX_RETRIES=3
 SUNSYNK_RETRY_BASE_DELAY_SECONDS=0.5
 ```
 
+Thresholds are in watts. `HIGH_CONSUMPTION_THRESHOLD` and
+`EVENING_CONSUMPTION_THRESHOLD` (without the `_W`) still work but log a
+deprecation warning.
+
 ## Managing Notification Settings
 
-Use the API to configure your notification preferences:
+Every endpoint except `/health` requires the `X-API-Key` header:
 
 ```bash
-# Update settings for default user
+# Update settings for the default user
 curl -X POST http://localhost:8001/settings \
+  -H "X-API-Key: $ZUVA_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "default",
@@ -84,13 +112,21 @@ curl -X POST http://localhost:8001/settings \
   }'
 ```
 
+Settings are stored in SQLite at `/data/zuva.db` inside the container, so keep
+the `zuva_api_data` volume across redeploys.
+
 ## API Endpoints
 
-- `GET /health` - System health check
-- `POST /settings` - Update notification settings
-- `GET /settings/{user_id}` - Get user settings
-- `POST /alert` - Send manual alert (for testing)
-- `GET /alerts/history/{user_id}?hours=24` - Get alert history
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /health` | none | System health check (also the container healthcheck) |
+| `POST /settings` | `X-API-Key` | Update notification settings |
+| `GET /settings/{user_id}` | `X-API-Key` | Get user settings |
+| `POST /alert` | `X-API-Key` | Send an alert (used by the collector, and for testing) |
+| `GET /alerts/history/{user_id}?hours=24` | `X-API-Key` | Get alert history |
+
+`POST /alert` answers 409 when the user has no settings (an alert with nowhere to
+go is a configuration error, not a success) and 502 when delivery fails.
 
 ## Alert Categories
 
@@ -102,6 +138,7 @@ curl -X POST http://localhost:8001/settings \
 | `grid_restored` | MEDIUM | Grid power restored |
 | `high_consumption` | MEDIUM | Load exceeds threshold |
 | `system_error` | HIGH | System errors |
+| `sunsynk_login_failure` | CRITICAL | The collector cannot log in to or reach the Sunsynk API |
 
 ## Architecture
 
@@ -119,7 +156,6 @@ curl -X POST http://localhost:8001/settings \
          ▼                        ▼
     ┌─────────┐         ┌─────────────────┐
     │ InfluxDB│         │  Telegram Bot   │
-    │         │         │  Telegram Bot  │
     └─────────┘         └─────────────────┘
 ```
 
@@ -127,43 +163,55 @@ curl -X POST http://localhost:8001/settings \
 
 The system consists of three main components:
 
-1. **InfluxDB**: Stores alert history and user settings
-2. **Notification API**: REST API for managing settings and sending notifications
-3. **Alert Monitor**: Polls Sunsynk API and triggers alerts based on thresholds
+1. **InfluxDB**: Stores telemetry and alert history
+2. **Notification API** (`zuva_api/`): REST API for managing settings and sending notifications
+3. **Alert Monitor** (`zuva/collector/`): Polls the Sunsynk API and triggers alerts based on thresholds
+
+```bash
+./scripts/setup.sh          # create ./venv and install dev dependencies
+./run-tests.sh              # full suite with coverage; extra args go to pytest
+./run-tests.sh -k grid      # run a subset
+./scripts/run-pylint.sh     # pylint over sunsynk, zuva and zuva_api
+```
 
 ### Running Locally
 
 ```bash
-# Install Python dependencies
-pip install -r zuva_api/requirements.txt
-cd zuva
-pip install -r collector/requirements.txt
+./scripts/setup.sh
+./venv/bin/pip install -r zuva_api/requirements.txt -r zuva/collector/requirements.txt
 
-# Run notification service
-cd ..
-python -m zuva_api.main
+# Notification service
+ZUVA_API_KEY=dev ./venv/bin/uvicorn zuva_api.main:app --port 8001
 
-# Run alert monitor (in separate terminal)
-cd zuva
-python -m collector.alert_monitor
+# Alert monitor (separate terminal, same key)
+ZUVA_API_KEY=dev ./venv/bin/python -m zuva.collector.orchestrator
 ```
+
+`scripts/manual/` holds two scripts for checking a live system: a Sunsynk login
+probe and an end-to-end notification test.
 
 ## Troubleshooting
 
 **No notifications received:**
-- Check that services are running: `docker compose --env-file zuva/.env -f docker-compose.yml ps`
-- Verify credentials in .env file
-- Check logs: `docker compose --env-file zuva/.env -f docker-compose.yml logs -f zuva-api`
-- Test Telegram bot: Send `/start` to your bot
+- Check that services are running: `docker compose ps`
+- Verify credentials in .env
+- Check logs: `docker compose logs -f zuva-api`
+- Test the Telegram bot: send `/start` to it
+- A 401 from `zuva-api` means the collector's `ZUVA_API_KEY` does not match the API's
 
 **Alert Monitor not connecting:**
-- Verify Sunsynk credentials
-- Check logs: `docker compose --env-file zuva/.env -f docker-compose.yml logs -f alert-monitor`
-- Ensure InfluxDB is running: `curl http://localhost:8086/health`
+- Verify Sunsynk credentials. After a rejected login the collector waits
+  `AUTH_FAILURE_BACKOFF_SECONDS` (6h by default) rather than retrying, because
+  repeated failed logins make Sunsynk demand a verification code. Restart the
+  container once the credentials are fixed.
+- Check logs: `docker compose logs -f alert-monitor`
+- Ensure InfluxDB is running: `curl http://127.0.0.1:8086/health`
+- `docker compose ps` shows the monitor as unhealthy if it has stopped polling:
+  the healthcheck reads a heartbeat file that each completed poll touches.
 
 ## Network Error Handling
 
-The client now handles transient connectivity failures more gracefully:
+The client handles transient connectivity failures gracefully:
 
 - Retries transient connection/timeout failures with exponential backoff (`SUNSYNK_MAX_RETRIES`, `SUNSYNK_RETRY_BASE_DELAY_SECONDS`)
 - Uses configurable connect/request timeouts (`SUNSYNK_CONNECT_TIMEOUT_SECONDS`, `SUNSYNK_REQUEST_TIMEOUT_SECONDS`)
@@ -181,35 +229,43 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+---
+
+# sunsynk API client library
+
 [![CI](https://github.com/jamesridgway/sunsynk-api-client/actions/workflows/ci.yml/badge.svg)](https://github.com/jamesridgway/sunsynk-api-client/actions/workflows/ci.yml)
 
-An API client library for reading data from the Sunsynk API that is used by the Sunsynk Connect apps and 
+An API client library for reading data from the Sunsynk API that is used by the Sunsynk Connect apps and
 [PowerView](https://pv.inteless.com/) portal.
 
+TLS certificates are verified by default; `verify_tls=False` (or
+`SUNSYNK_VERIFY_TLS=false`) disables that for lab use only.
 
 ## Example Usage
 
     import asyncio
     import os
-    
+
     from sunsynk.client import SunsynkClient
-    
-    
+
+
     async def main():
         sunsynk_username = os.getenv('SUNSYNK_USERNAME')
         sunsynk_password = os.getenv('SUNSYNK_PASSWORD')
-    
+
         async with SunsynkClient(sunsynk_username, sunsynk_password) as client:
             inverters = await client.get_inverters()
             for inverter in inverters:
                 grid = await client.get_inverter_realtime_grid(inverter.sn)
                 battery = await client.get_inverter_realtime_battery(inverter.sn)
                 solar_pv = await client.get_inverter_realtime_input(inverter.sn)
-    
+
                 await client.get_inverter_realtime_output(inverter.sn)
-    
-                print(f"Inverter (sn: {inverter.sn}) is drawing {grid.get_power()}kWh from the grid, {battery.power}kWh from battery and {solar_pv.get_power()}kWh.")
-    
+
+                print(f"Inverter (sn: {inverter.sn}) is drawing {grid.get_power()}W from the grid, "
+                      f"{battery.power}W from battery and {solar_pv.get_power()}W from solar.")
+
         print('Done!')
-    
+
     asyncio.run(main())
