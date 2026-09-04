@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Run the stack:
 
 ```bash
-cp zuva/.env.template .env    # then fill in SUNSYNK_*, ZUVA_API_KEY, INFLUXDB_*
+cp zuva/.env.template .env    # then fill in SUNSYNK_*, ZUVA_API_KEY, TELEGRAM_*
 docker compose up -d --build  # or ./zuva/start.sh, which checks .env first
 ```
 
@@ -59,10 +59,10 @@ Three independently deployable layers in one repo:
 
 `AlertOrchestrator` (`orchestrator.py`) is composition only; the collaborators it injects are what tests exercise:
 
-- `TelemetryCollector` (`telemetry.py`) — writes one InfluxDB `usage_readings` point per poll (tags `inverter_sn`, `plant_id`), swallowing write errors.
+- `TelemetryCollector` (`telemetry.py`) — builds one reading dict per poll and hands it to the same `NotificationSender`, which POSTs it to `zuva-api`. Optional fields that came back `None` are omitted rather than sent as null, and post errors are swallowed so a lost reading does not skip the alert checks that follow.
 - `AlertEvaluator` (`alert_logic.py`) — alert state machine. Battery alerts fire once per state transition and re-arm only above `BATTERY_LOW_THRESHOLD + BATTERY_RECOVERY_MARGIN`; a grid outage needs N consecutive low-voltage readings, then repeats as a reminder every `GRID_OUTAGE_COOLDOWN_MINUTES` (0 = alert once) until a restore is confirmed. Consumption checks are time-of-day gated in local time (silent 05:00–18:00, `EVENING_CONSUMPTION_THRESHOLD_W` 18:00–22:00, `HIGH_CONSUMPTION_THRESHOLD_W` otherwise).
 - `StateStore` (`state_store.py`) — persists suppression state to `COLLECTOR_STATE_PATH` (`/data/collector-state.json`) with an atomic temp-file-plus-`os.replace` write, so a restart does not re-send every alert. An unwritable path logs once and then disables itself.
-- `NotificationSender` (`notification.py`) — POSTs `/alert` to `zuva-api` with the shared `X-API-Key`, over one long-lived aiohttp session (`aclose()` on shutdown). Falls back to `localhost` when the URL host is `zuva-api` and `/.dockerenv` is absent, so the same config works in and out of Docker.
+- `NotificationSender` (`notification.py`) — the collector's only HTTP client for `zuva-api`: `send()` POSTs `/alert` (with `?user_id=`), `send_telemetry()` POSTs `/telemetry` (no user id — a reading belongs to the inverter). Both go through `_post()` with the shared `X-API-Key` over one long-lived aiohttp session (`aclose()` on shutdown), and fall back to `localhost` when the URL host is `zuva-api` and `/.dockerenv` is absent, so the same config works in and out of Docker.
 - `heartbeat.py` — the loop touches `HEARTBEAT_PATH` after each completed poll; `python -m collector.heartbeat` exits non-zero once it is stale (`POLL_INTERVAL * 3 + 60`, floor 180s) and is the container healthcheck. A wedged poll loop in a live process is otherwise invisible.
 
 `monitor_loop` has two nested loops. The outer one owns the client: `connect_client_with_retry()` returns `(client, retry_wait_seconds)` and the caller sleeps for that wait. Bad credentials do **not** get retried — they return `AUTH_FAILURE_BACKOFF_SECONDS` (6h) after one attempt, because repeated failed logins are what makes Sunsynk demand a verification code; connectivity failures retry once after `LOGIN_RETRY_WAIT_SECONDS`. The inner loop polls; auth exceptions `break` to force a re-login, connectivity errors log and continue.
@@ -71,17 +71,24 @@ Three independently deployable layers in one repo:
 
 - `main.py` is wiring and handlers only; all behaviour lives in `NotificationService` (`notification_service.py`).
 - **Every endpoint except `/health` requires `X-API-Key: $ZUVA_API_KEY`** (constant-time compare). The lifespan raises `RuntimeError` if `ZUVA_API_KEY` is unset, so the service fails closed rather than starting unauthenticated.
-- User settings live in SQLite (`SETTINGS_DB_PATH`, `/data/zuva.db`) behind `SettingsStore`, mirrored into an in-memory dict at startup; legacy settings in the InfluxDB `user_settings` measurement are migrated once. Sent alerts are appended to the `alerts` measurement, which backs `GET /alerts/history/{user_id}` — that query is parameterised Flux (`query(query=…, params=…)`), never string-interpolated.
+- **One SQLite file (`SETTINGS_DB_PATH`, `/data/zuva.db`) is the whole database**, and `zuva-api` is the only process that touches it. `SqliteStore` (`sqlite_store.py`) holds the connection handling and path resolution; `SettingsStore` and `HistoryStore` are subclasses that each contribute their own `SCHEMA`, so both open the same file. That volume is the entire backup.
+- User settings live in `user_settings`/`alert_state` behind `SettingsStore`, mirrored into an in-memory dict at startup. `HistoryStore` (`history_store.py`) owns `alerts` (backs `GET /alerts/history/{user_id}`) and `readings` (written by `POST /telemetry`). All SQL is parameterised with `?`; the user id is never interpolated.
+- Timestamps are stored as **UTC ISO-8601 strings** so a lexicographic `>=` is a valid time comparison, and converted back to `TIMEZONE` on read. Writing local time would break every range query at a DST boundary.
+- Retention is in-process: `HistoryStore.prune()` deletes rows older than `HISTORY_RETENTION_DAYS` (90; `0` keeps everything) and `record_reading` calls it at most every 6h. Nothing else ages the file down — there is no bucket retention any more. `_last_prune` starts at `None` for the same reason as the login throttle: `time.monotonic()` has an arbitrary epoch.
+- `initialize()` wraps the history store's setup in `try/except` — history is a record, not the job, so an unusable file must not stop alerts going out.
 - If `DEFAULT_USER_ID` has no stored settings, one is synthesised from `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`.
 - `send_alert` filter order: force `battery_critical` to `critical` severity → look up settings (no settings ⇒ `unknown_user`, which `POST /alert` turns into a 409) → min-severity check → quiet hours in `TIMEZONE` (`critical` bypasses) → per-category rate limit. The rate-limit stamp is only written if a channel send succeeded, so a Telegram failure does not consume the window; a failed delivery returns `failed` → 502.
 - Telegram is the only channel; `from telegram import Bot` is wrapped in `try/except ImportError` so the tests run without `python-telegram-bot` installed (it is deliberately absent from `requirements-dev.txt`).
 
-Alert path end to end: Sunsynk API → collector poll → InfluxDB telemetry write + `AlertEvaluator` (dedupe/state, persisted) → `POST /alert` with `X-API-Key` → `NotificationService` (severity/quiet-hours/rate-limit) → Telegram + InfluxDB `alerts`.
+Alert path end to end: Sunsynk API → collector poll → `POST /telemetry` (stored in `readings`) + `AlertEvaluator` (dedupe/state, persisted) → `POST /alert` with `X-API-Key` → `NotificationService` (severity/quiet-hours/rate-limit) → Telegram + a row in `alerts`.
+
+Sending notifications is the product. The stored history is a record of what was sent, not a feature: there is no dashboard, no frontend, and nothing reads `readings` yet.
 
 ## Gotchas
 
-- **All config is read at module import time** (`orchestrator.py`, `zuva_api/db.py`, `notification_service.py`, `main.py` read `os.getenv` at top level). Setting `os.environ` inside a test has no effect — monkeypatch the module attribute instead (`monkeypatch.setattr(main_module, "ZUVA_API_KEY", …)`), or build a config dict as `tests/test_alert_logic.py` does.
-- Telemetry field names in InfluxDB still end in `_kw` while the values are watts (`load_power_kw=812`). Renaming them would split the historical series; the keyword arguments are `*_w` and `tests/test_telemetry_collector.py` pins the mismatch deliberately.
+- **All config is read at module import time** (`orchestrator.py`, `notification_service.py`, `main.py`, `history_store.py` read `os.getenv` at top level). Setting `os.environ` inside a test has no effect — monkeypatch the module attribute instead (`monkeypatch.setattr(main_module, "ZUVA_API_KEY", …)`), or build a config dict as `tests/test_alert_logic.py` does. `SETTINGS_DB_PATH` is the exception: the stores resolve it per instance, so a test can point it at `tmp_path` with `monkeypatch.setenv` — and should, or a default-constructed store writes to `/data`.
+- Reading field names end in `_w` and the values are watts. The InfluxDB schema this replaced held watt values in `*_kw` fields; `tests/test_telemetry_collector.py` now asserts no payload key ends in `_kw`.
+- A `readings` column set is pinned by `READING_COLUMNS` in `history_store.py` and by `TelemetryReading` in `zuva_api/models.py`. An unknown field raises rather than being silently dropped, so adding a metric means editing both plus the `SCHEMA`.
 - `HIGH_CONSUMPTION_THRESHOLD` / `EVENING_CONSUMPTION_THRESHOLD` (no `_W`) are still honoured with a deprecation warning; the `_W` names are canonical.
 - `ALERT_CONFIG` is injected into `AlertEvaluator.__init__` and `check_consumption_alerts` also accepts a `config=` override — change both call sites together.
 - `Alert.category` is a closed `AlertCategory` enum, so `POST /alert` rejects anything outside it with a 422. A new collector alert category means editing `zuva_api/models.py` too.
@@ -90,4 +97,4 @@ Alert path end to end: Sunsynk API → collector poll → InfluxDB telemetry wri
 - Both images set `TZ` and `TIMEZONE` and install `tzdata`; without it `zoneinfo` silently falls back to UTC and the evening window fires two hours early in SAST.
 - Local pylint must be 3.x — 2.17.x dies with `astroid-error` on the pydantic models in `zuva_api`.
 - `README.md` is two documents: the notification system, then the original library README under `# sunsynk API client library`.
-- `llm.md` and `saas.md` are proposal documents, not descriptions of the current code — `llm.md` still refers to `alert_monitor.py`, which is now `alert_logic.py`.
+- `llm.md` (adaptive thresholds) and `saas.md` (multi-tenancy) are proposals, not descriptions of the current code. Both are scoped to notifications only — no dashboard or frontend is planned, so don't add one on their authority.

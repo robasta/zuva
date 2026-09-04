@@ -36,9 +36,9 @@ cp zuva/.env.template .env
 # Edit .env with your credentials
 ```
 
-   At a minimum set `SUNSYNK_USERNAME`, `SUNSYNK_PASSWORD`, `INFLUXDB_TOKEN`,
-   `INFLUXDB_ADMIN_PASSWORD` and `ZUVA_API_KEY`. The notification API refuses to
-   start without `ZUVA_API_KEY`, and the collector must send the same value:
+   At a minimum set `SUNSYNK_USERNAME`, `SUNSYNK_PASSWORD` and `ZUVA_API_KEY`.
+   The notification API refuses to start without `ZUVA_API_KEY`, and the
+   collector must send the same value:
 ```bash
 openssl rand -hex 32   # use the output as ZUVA_API_KEY
 ```
@@ -112,8 +112,11 @@ curl -X POST http://localhost:8001/settings \
   }'
 ```
 
-Settings are stored in SQLite at `/data/zuva.db` inside the container, so keep
-the `zuva_api_data` volume across redeploys.
+Settings, alert history and poll readings all live in one SQLite file at
+`/data/zuva.db` inside the `zuva-api` container, so keep the `zuva_api_data`
+volume across redeploys - that volume is the whole backup. Alerts and readings
+older than `HISTORY_RETENTION_DAYS` (90 by default; 0 keeps everything) are
+deleted by a periodic sweep inside the API.
 
 ## API Endpoints
 
@@ -123,6 +126,7 @@ the `zuva_api_data` volume across redeploys.
 | `POST /settings` | `X-API-Key` | Update notification settings |
 | `GET /settings/{user_id}` | `X-API-Key` | Get user settings |
 | `POST /alert` | `X-API-Key` | Send an alert (used by the collector, and for testing) |
+| `POST /telemetry` | `X-API-Key` | Store one poll's readings (used by the collector) |
 | `GET /alerts/history/{user_id}?hours=24` | `X-API-Key` | Get alert history |
 
 `POST /alert` answers 409 when the user has no settings (an alert with nowhere to
@@ -148,24 +152,28 @@ go is a configuration error, not a success) and 502 when delivery fails.
 └────────┬────────┘
          │
          ▼
-┌─────────────────┐      ┌──────────────────┐
-│ Alert Monitor   │─────▶│ Notification API │
-│  (Collector)    │      │   (FastAPI)      │
-└─────────────────┘      └────────┬─────────┘
-         │                        │
-         ▼                        ▼
-    ┌─────────┐         ┌─────────────────┐
-    │ InfluxDB│         │  Telegram Bot   │
-    └─────────┘         └─────────────────┘
+┌─────────────────┐   alerts    ┌──────────────────┐
+│ Alert Monitor   │────────────▶│ Notification API │
+│  (Collector)    │  telemetry  │   (FastAPI)      │
+└─────────────────┘────────────▶└────┬────────┬────┘
+                                     │        │
+                                     ▼        ▼
+                          ┌──────────────┐  ┌───────────────┐
+                          │ SQLite       │  │ Telegram Bot  │
+                          │ /data/zuva.db│  └───────────────┘
+                          └──────────────┘
 ```
+
+Sending notifications is the point of the system. Everything else exists to
+support that: there is no dashboard and no web frontend, and the stored history
+is a record of what was sent, not a product feature.
 
 ## Development
 
-The system consists of three main components:
+Two containers, and only one of them touches storage:
 
-1. **InfluxDB**: Stores telemetry and alert history
-2. **Notification API** (`zuva_api/`): REST API for managing settings and sending notifications
-3. **Alert Monitor** (`zuva/collector/`): Polls the Sunsynk API and triggers alerts based on thresholds
+1. **Notification API** (`zuva_api/`): REST API for settings, alerts and telemetry. Owns the single SQLite database.
+2. **Alert Monitor** (`zuva/collector/`): Polls the Sunsynk API, evaluates thresholds, and posts alerts and readings to the API. Holds no database credentials.
 
 ```bash
 ./scripts/setup.sh          # create ./venv and install dev dependencies
@@ -205,7 +213,6 @@ probe and an end-to-end notification test.
   repeated failed logins make Sunsynk demand a verification code. Restart the
   container once the credentials are fixed.
 - Check logs: `docker compose logs -f alert-monitor`
-- Ensure InfluxDB is running: `curl http://127.0.0.1:8086/health`
 - `docker compose ps` shows the monitor as unhealthy if it has stopped polling:
   the healthcheck reads a heartbeat file that each completed poll touches.
 
